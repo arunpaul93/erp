@@ -3,12 +3,14 @@
 import { useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
+import { useOrg } from '@/contexts/OrgContext'
 
 export default function HomePage() {
   const { user, loading, signOut } = useAuth()
   const router = useRouter()
 
   const cards = [
+    { title: 'Business Plan', desc: 'Strategic goals and initiatives.', path: '/business-plan' },
     { title: 'Sales', desc: 'Track orders, invoices, and revenue.' },
     { title: 'Inventory', desc: 'Manage stock levels and products.' },
     { title: 'Purchases', desc: 'Vendors, POs, and bills.' },
@@ -54,12 +56,16 @@ export default function HomePage() {
               <span className="text-sm text-gray-300">
                 {user.email}
               </span>
-              <button
-                onClick={handleSignOut}
-                className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-4 py-2 rounded-md text-sm font-medium"
-              >
-                Sign out
-              </button>
+              <div className="flex items-center gap-3">
+                {/* Org selector will be inserted here */}
+                <OrgSelector />
+                <button
+                  onClick={handleSignOut}
+                  className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-4 py-2 rounded-md text-sm font-medium"
+                >
+                  Sign out
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -87,7 +93,11 @@ export default function HomePage() {
                   <h3 className="text-lg font-semibold text-gray-100">{c.title}</h3>
                 </div>
                 <p className="text-sm text-gray-400">{c.desc}</p>
-                <button className="mt-4 inline-flex items-center gap-2 text-yellow-400 text-sm hover:text-yellow-300">
+                <button
+                  onClick={() => (c as any).path && router.push((c as any).path)}
+                  className="mt-4 inline-flex items-center gap-2 text-yellow-400 text-sm hover:text-yellow-300 disabled:opacity-50"
+                  disabled={!(c as any).path}
+                >
                   Open
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -98,6 +108,28 @@ export default function HomePage() {
           </div>
         </div>
       </main>
+    </div>
+  )
+}
+
+function OrgSelector() {
+  const { orgs, selectedOrgId, setSelectedOrgId, loading } = useOrg()
+
+  if (loading) return <div className="text-sm text-gray-400">Loading orgs...</div>
+  if (!orgs || orgs.length === 0) return <div className="text-sm text-gray-400">No orgs</div>
+
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm text-gray-400">Organization:</span>
+      <select
+        value={selectedOrgId ?? ''}
+        onChange={(e) => setSelectedOrgId(e.target.value ?? null)}
+        className="bg-gray-800 text-gray-200 border border-gray-600 hover:border-yellow-400 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 px-3 py-1.5 rounded-md text-sm font-medium min-w-[150px]"
+      >
+        {orgs.map((o) => (
+          <option key={o.id} value={o.id} className="bg-gray-800 text-gray-200">{o.name}</option>
+        ))}
+      </select>
     </div>
   )
 }
