@@ -14,8 +14,11 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Supabase Next.js App",
-  description: "A Next.js app with Supabase authentication",
+  title: "Minnal",
+  description: "Minnal - Lightning fast ERP with Supabase authentication",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({

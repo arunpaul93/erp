@@ -8,6 +8,15 @@ export default function HomePage() {
   const { user, loading, signOut } = useAuth()
   const router = useRouter()
 
+  const cards = [
+    { title: 'Sales', desc: 'Track orders, invoices, and revenue.' },
+    { title: 'Inventory', desc: 'Manage stock levels and products.' },
+    { title: 'Purchases', desc: 'Vendors, POs, and bills.' },
+    { title: 'HR', desc: 'Employees, leave, and payroll.' },
+    { title: 'Analytics', desc: 'KPIs and dashboards.' },
+    { title: 'Settings', desc: 'Company, roles, and permissions.' },
+  ]
+
   useEffect(() => {
     if (!loading && !user) {
       router.push('/login')
@@ -57,27 +66,35 @@ export default function HomePage() {
       </nav>
 
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-        <div className="px-4 py-6 sm:px-0">
-          <div className="border-4 border-dashed border-gray-800 rounded-lg h-96 flex items-center justify-center bg-gray-900">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold text-yellow-400 mb-4">
-                Welcome, {user.email}!
-              </h2>
-              <p className="text-gray-300">
-                This is your home page. You are successfully authenticated with Supabase.
-              </p>
-              <div className="mt-8 p-4 bg-gray-800 rounded-lg">
-                <h3 className="text-lg font-semibold text-yellow-300 mb-2">
-                  User Information
-                </h3>
-                <div className="text-left text-sm text-yellow-200">
-                  <p><strong>ID:</strong> {user.id}</p>
-                  <p><strong>Email:</strong> {user.email}</p>
-                  <p><strong>Created:</strong> {new Date(user.created_at).toLocaleDateString()}</p>
-                  <p><strong>Last Sign In:</strong> {user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleDateString() : 'N/A'}</p>
-                </div>
-              </div>
+        <div className="px-4 sm:px-0">
+          <div className="mb-6 flex items-center justify-between">
+            <div>
+              <h2 className="text-2xl font-bold text-yellow-400">Dashboard</h2>
+              <p className="text-sm text-gray-400 mt-1">Welcome, {user.email}</p>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {cards.map((c) => (
+              <div
+                key={c.title}
+                className="group rounded-xl border border-gray-800 bg-gray-900/80 backdrop-blur-sm p-5 hover:border-yellow-400 transition-colors"
+              >
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="inline-flex items-center justify-center w-9 h-9 rounded-md bg-yellow-500/10 text-yellow-400">
+                    ⚡
+                  </span>
+                  <h3 className="text-lg font-semibold text-gray-100">{c.title}</h3>
+                </div>
+                <p className="text-sm text-gray-400">{c.desc}</p>
+                <button className="mt-4 inline-flex items-center gap-2 text-yellow-400 text-sm hover:text-yellow-300">
+                  Open
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       </main>
