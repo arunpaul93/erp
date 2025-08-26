@@ -143,6 +143,15 @@ export default function BusinessPlanPage() {
                                                         </span>
                                                     )}
                                                     <button
+                                                        className="text-yellow-300 hover:text-yellow-200 text-xs border border-yellow-400/40 hover:border-yellow-400 px-2 py-1 rounded"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            router.push(`/business-plan/${item.id}/budgets`)
+                                                        }}
+                                                    >
+                                                        Manage budgets
+                                                    </button>
+                                                    <button
                                                         className="text-red-300 hover:text-red-200 text-xs border border-red-400/40 hover:border-red-400 px-2 py-1 rounded"
                                                         onClick={(e) => {
                                                             e.stopPropagation()

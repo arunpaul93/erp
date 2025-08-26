@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
+import StrategyCanvas from '@/components/StrategyCanvas'
+import type { CanvasData } from '@/components/StrategyCanvas'
 
 export default function BusinessPlanDetailPage() {
   const router = useRouter()
@@ -22,18 +24,20 @@ export default function BusinessPlanDetailPage() {
   // Editable fields
   const [name, setName] = useState('')
   const [problem, setProblem] = useState('')
-  const [solution, setSolution] = useState('')
+
   const [uniqueSellingPoint, setUniqueSellingPoint] = useState('')
   const [targetMarket, setTargetMarket] = useState('')
-  const [revenueModel, setRevenueModel] = useState('')
-  const [fixedCosts, setFixedCosts] = useState('')
-  const [variableCosts, setVariableCosts] = useState('')
-  const [marketingAndSalesChannels, setMarketingAndSalesChannels] = useState('')
+
+
+
   const [keyMetrics, setKeyMetrics] = useState('')
   const [risksAndPlanB, setRisksAndPlanB] = useState('')
   const [vision35Years, setVision35Years] = useState('')
-  const [longTermGoal10Years, setLongTermGoal10Years] = useState('')
+
   const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
+  const [operationalWorkflow, setOperationalWorkflow] = useState<string[]>([''])
+  // budget items are managed on the budget detail page
+  const [canvas, setCanvas] = useState<CanvasData | null>(null)
 
   const orgName = useMemo(() => orgs.find(o => o.id === selectedOrgId)?.name ?? '—', [orgs, selectedOrgId])
 
@@ -62,24 +66,40 @@ export default function BusinessPlanDetailPage() {
         // Hydrate form
         setName(data?.name ?? '')
         setProblem(data?.problem ?? '')
-        setSolution(data?.solution ?? '')
+
         setUniqueSellingPoint(data?.unique_selling_point ?? '')
         setTargetMarket(data?.target_market ?? '')
-        setRevenueModel(data?.revenue_model ?? '')
-        setFixedCosts(data?.fixed_costs ?? '')
-        setVariableCosts(data?.variable_costs ?? '')
-        setMarketingAndSalesChannels(data?.marketing_and_sales_channels ?? '')
+
+
+
         setKeyMetrics(data?.key_metrics ?? '')
         setRisksAndPlanB(data?.risks_and_plan_b ?? '')
-        setVision35Years(data?.vision_3_5_years ?? '')
-        setLongTermGoal10Years(data?.long_term_goal_10_years ?? '')
+  setVision35Years(data?.vision_3_5_years ?? '')
+  setCanvas((data as any)?.canvas ?? null)
+
         setPrioritiesNext90Days(data?.priorities_next_90_days ?? '')
+        // operational_workflow may be stored as JSON array (jsonb) or as a legacy string
+        if (Array.isArray(data?.operational_workflow)) {
+          setOperationalWorkflow(data.operational_workflow as string[])
+        } else if (typeof data?.operational_workflow === 'string') {
+          try {
+            const parsed = JSON.parse(data.operational_workflow)
+            if (Array.isArray(parsed)) setOperationalWorkflow(parsed)
+            else setOperationalWorkflow((data.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+          } catch {
+            setOperationalWorkflow((data.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+          }
+        } else {
+          setOperationalWorkflow([''])
+        }
       }
       setLoading(false)
     }
 
     run()
   }, [id, selectedOrgId])
+
+  // budget items are managed on the budget detail page
 
   const onSave = async (e: FormEvent) => {
     e.preventDefault()
@@ -93,18 +113,18 @@ export default function BusinessPlanDetailPage() {
       .update({
         name: name || null,
         problem: problem || null,
-        solution: solution || null,
+
         unique_selling_point: uniqueSellingPoint || null,
         target_market: targetMarket || null,
-        revenue_model: revenueModel || null,
-        fixed_costs: fixedCosts || null,
-        variable_costs: variableCosts || null,
-        marketing_and_sales_channels: marketingAndSalesChannels || null,
+
+        operational_workflow: operationalWorkflow.length ? operationalWorkflow : null,
+
         key_metrics: keyMetrics || null,
         risks_and_plan_b: risksAndPlanB || null,
         vision_3_5_years: vision35Years || null,
-        long_term_goal_10_years: longTermGoal10Years || null,
-        priorities_next_90_days: prioritiesNext90Days || null,
+
+  priorities_next_90_days: prioritiesNext90Days || null,
+  canvas: canvas ? canvas : null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
@@ -155,6 +175,7 @@ export default function BusinessPlanDetailPage() {
               <div className="text-gray-400 text-sm">Select an organisation first.</div>
             ) : (
               <form onSubmit={onSave} className="space-y-4">
+                {/* Budget selection removed per request */}
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Name</label>
                   <input
@@ -174,22 +195,23 @@ export default function BusinessPlanDetailPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-300 mb-1">Solution</label>
-                  <textarea
-                    value={solution}
-                    onChange={(e) => setSolution(e.target.value)}
-                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                  />
-                </div>
 
-                <div>
+
+        <div>
                   <label className="block text-sm text-gray-300 mb-1">Unique Selling Point</label>
                   <textarea
                     value={uniqueSellingPoint}
                     onChange={(e) => setUniqueSellingPoint(e.target.value)}
                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
                   />
+                </div>
+
+                {/* Strategy Canvas */}
+        <div>
+                  <label className="block text-sm text-gray-300 mb-2">Strategy Canvas</label>
+                  <div className="-mx-4">
+          <StrategyCanvas value={canvas} onChange={setCanvas} fullScreen selfName={orgName} />
+                  </div>
                 </div>
 
                 <div>
@@ -201,41 +223,36 @@ export default function BusinessPlanDetailPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-300 mb-1">Revenue Model</label>
-                  <textarea
-                    value={revenueModel}
-                    onChange={(e) => setRevenueModel(e.target.value)}
-                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                  />
-                </div>
+
 
                 <div>
-                  <label className="block text-sm text-gray-300 mb-1">Fixed Costs</label>
-                  <textarea
-                    value={fixedCosts}
-                    onChange={(e) => setFixedCosts(e.target.value)}
-                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[80px]"
-                  />
+                  <label className="block text-sm text-gray-300 mb-1">Operational Workflow (steps)</label>
+                  <div className="space-y-2">
+                    {operationalWorkflow.map((step, idx) => (
+                      <div key={idx} className="flex gap-2">
+                        <input
+                          value={step}
+                          onChange={(e) => {
+                            const copy = [...operationalWorkflow]
+                            copy[idx] = e.target.value
+                            setOperationalWorkflow(copy)
+                          }}
+                          className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
+                          placeholder={`Step ${idx + 1}`}
+                        />
+                        <button type="button" onClick={() => setOperationalWorkflow(prev => prev.filter((_, i) => i !== idx))} className="text-red-400">Remove</button>
+                      </div>
+                    ))}
+
+                    <div>
+                      <button type="button" onClick={() => setOperationalWorkflow(prev => [...prev, ''])} className="text-yellow-400">+ Add step</button>
+                    </div>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-300 mb-1">Variable Costs</label>
-                  <textarea
-                    value={variableCosts}
-                    onChange={(e) => setVariableCosts(e.target.value)}
-                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[80px]"
-                  />
-                </div>
 
-                <div>
-                  <label className="block text-sm text-gray-300 mb-1">Marketing and Sales Channels</label>
-                  <textarea
-                    value={marketingAndSalesChannels}
-                    onChange={(e) => setMarketingAndSalesChannels(e.target.value)}
-                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                  />
-                </div>
+
+
 
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Key Metrics</label>
@@ -264,14 +281,7 @@ export default function BusinessPlanDetailPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm text-gray-300 mb-1">Long-term Goal (10 years)</label>
-                  <textarea
-                    value={longTermGoal10Years}
-                    onChange={(e) => setLongTermGoal10Years(e.target.value)}
-                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                  />
-                </div>
+
 
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Priorities (next 90 days)</label>
@@ -281,6 +291,8 @@ export default function BusinessPlanDetailPage() {
                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
                   />
                 </div>
+
+                {/* Operational workflow steps rendered earlier in the form */}
 
                 <div className="flex gap-3 pt-2">
                   <button

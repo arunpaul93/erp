@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
+import StrategyCanvas from '@/components/StrategyCanvas'
+import type { CanvasData } from '@/components/StrategyCanvas'
 
 export default function NewBusinessPlanPage() {
     const router = useRouter()
@@ -12,20 +14,21 @@ export default function NewBusinessPlanPage() {
     const { selectedOrgId, orgs, loading: orgLoading } = useOrg()
     const [name, setName] = useState('')
     const [problem, setProblem] = useState('')
-    const [solution, setSolution] = useState('')
+
     const [uniqueSellingPoint, setUniqueSellingPoint] = useState('')
     const [targetMarket, setTargetMarket] = useState('')
-    const [revenueModel, setRevenueModel] = useState('')
-    const [fixedCosts, setFixedCosts] = useState('')
-    const [variableCosts, setVariableCosts] = useState('')
-    const [marketingAndSalesChannels, setMarketingAndSalesChannels] = useState('')
+
+
+
     const [keyMetrics, setKeyMetrics] = useState('')
     const [risksAndPlanB, setRisksAndPlanB] = useState('')
     const [vision35Years, setVision35Years] = useState('')
-    const [longTermGoal10Years, setLongTermGoal10Years] = useState('')
+
     const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
+    const [operationalWorkflow, setOperationalWorkflow] = useState<string[]>([''])
     const [saving, setSaving] = useState(false)
     const [error, setError] = useState<string | null>(null)
+    const [canvas, setCanvas] = useState<CanvasData | null>(null)
 
     const orgName = useMemo(() => orgs.find(o => o.id === selectedOrgId)?.name ?? '—', [orgs, selectedOrgId])
 
@@ -43,18 +46,18 @@ export default function NewBusinessPlanPage() {
             organisation_id: selectedOrgId,
             name: name || null,
             problem: problem || null,
-            solution: solution || null,
+
             unique_selling_point: uniqueSellingPoint || null,
             target_market: targetMarket || null,
-            revenue_model: revenueModel || null,
-            fixed_costs: fixedCosts || null,
-            variable_costs: variableCosts || null,
-            marketing_and_sales_channels: marketingAndSalesChannels || null,
+
+            operational_workflow: operationalWorkflow.length ? operationalWorkflow : null,
+
             key_metrics: keyMetrics || null,
             risks_and_plan_b: risksAndPlanB || null,
             vision_3_5_years: vision35Years || null,
-            long_term_goal_10_years: longTermGoal10Years || null,
+
             priorities_next_90_days: prioritiesNext90Days || null,
+            canvas: canvas ? canvas : null,
         })
 
         if (error) {
@@ -115,15 +118,7 @@ export default function NewBusinessPlanPage() {
                                 />
                             </div>
 
-                            <div>
-                                <label className="block text-sm text-gray-300 mb-1">Solution</label>
-                                <textarea
-                                    value={solution}
-                                    onChange={e => setSolution(e.target.value)}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                                    placeholder="How will we solve it?"
-                                />
-                            </div>
+
 
                             <div>
                                 <label className="block text-sm text-gray-300 mb-1">Unique Selling Point</label>
@@ -136,6 +131,13 @@ export default function NewBusinessPlanPage() {
                             </div>
 
                             <div>
+                                <label className="block text-sm text-gray-300 mb-2">Strategy Canvas</label>
+                                <div className="-mx-4">
+                                    <StrategyCanvas value={canvas} onChange={setCanvas} fullScreen selfName={orgName} />
+                                </div>
+                            </div>
+
+                            <div>
                                 <label className="block text-sm text-gray-300 mb-1">Target Market</label>
                                 <textarea
                                     value={targetMarket}
@@ -145,47 +147,38 @@ export default function NewBusinessPlanPage() {
                                 />
                             </div>
 
-                            
+
+
+
 
                             <div>
-                                <label className="block text-sm text-gray-300 mb-1">Revenue Model</label>
-                                <textarea
-                                    value={revenueModel}
-                                    onChange={e => setRevenueModel(e.target.value)}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                                    placeholder="How do we make money?"
-                                />
+                                <label className="block text-sm text-gray-300 mb-1">Operational Workflow (steps)</label>
+                                <div className="space-y-2">
+                                    {operationalWorkflow.map((step, idx) => (
+                                        <div key={idx} className="flex gap-2">
+                                            <input
+                                                value={step}
+                                                onChange={e => {
+                                                    const copy = [...operationalWorkflow]
+                                                    copy[idx] = e.target.value
+                                                    setOperationalWorkflow(copy)
+                                                }}
+                                                className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
+                                                placeholder={`Step ${idx + 1}`}
+                                            />
+                                            <button type="button" onClick={() => setOperationalWorkflow(prev => prev.filter((_, i) => i !== idx))} className="text-red-400">Remove</button>
+                                        </div>
+                                    ))}
+
+                                    <div>
+                                        <button type="button" onClick={() => setOperationalWorkflow(prev => [...prev, ''])} className="text-yellow-400">+ Add step</button>
+                                    </div>
+                                </div>
                             </div>
 
-                            <div>
-                                <label className="block text-sm text-gray-300 mb-1">Fixed Costs</label>
-                                <textarea
-                                    value={fixedCosts}
-                                    onChange={e => setFixedCosts(e.target.value)}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[80px]"
-                                    placeholder="Rent, salaries, utilities, etc."
-                                />
-                            </div>
 
-                            <div>
-                                <label className="block text-sm text-gray-300 mb-1">Variable Costs</label>
-                                <textarea
-                                    value={variableCosts}
-                                    onChange={e => setVariableCosts(e.target.value)}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[80px]"
-                                    placeholder="Materials, shipping, transaction fees, etc."
-                                />
-                            </div>
 
-                            <div>
-                                <label className="block text-sm text-gray-300 mb-1">Marketing and Sales Channels</label>
-                                <textarea
-                                    value={marketingAndSalesChannels}
-                                    onChange={e => setMarketingAndSalesChannels(e.target.value)}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                                    placeholder="How will we reach customers?"
-                                />
-                            </div>
+
 
                             <div>
                                 <label className="block text-sm text-gray-300 mb-1">Key Metrics</label>
@@ -217,15 +210,7 @@ export default function NewBusinessPlanPage() {
                                 />
                             </div>
 
-                            <div>
-                                <label className="block text-sm text-gray-300 mb-1">Long-term Goal (10 years)</label>
-                                <textarea
-                                    value={longTermGoal10Years}
-                                    onChange={e => setLongTermGoal10Years(e.target.value)}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
-                                    placeholder="Ambition for the next decade"
-                                />
-                            </div>
+
 
                             <div>
                                 <label className="block text-sm text-gray-300 mb-1">Priorities (next 90 days)</label>
