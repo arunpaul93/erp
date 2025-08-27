@@ -12,6 +12,8 @@ export default function WorkflowEditor({ value, onChange, height = 480 }: { valu
     const [open, setOpen] = useState(false)
     const [nodes, setNodes] = useState<WfNode[]>([])
     const [edges, setEdges] = useState<WfEdge[]>([])
+    // selection
+    const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
     // viewport (pan/zoom)
     const [scale, setScale] = useState(1)
     const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -192,16 +194,16 @@ export default function WorkflowEditor({ value, onChange, height = 480 }: { valu
             return { d, usedYs: [laneKeyY(ay), laneKeyY(yUnder), laneKeyY(by)], usedXs: [laneKeyX(v1x), laneKeyX(v2x)], edgeRects }
         }
 
-    // Rightward: always detour (no straight-line fast path)
+        // Rightward: always detour (no straight-line fast path)
 
-    let sx = ax + CLEAR
-    let tx = endX - CLEAR
-    // Prefer an escape lane above both nodes; fallback to below if above is exhausted
-    const src = nodesRef.current.find(n => n.id === fromId)
-    const tgt = nodesRef.current.find(n => n.id === toId)
-    const topY = Math.min(src?.y ?? ay, tgt?.y ?? by)
-    const bottomY = Math.max((src?.y ?? ay) + NODE_H, (tgt?.y ?? by) + NODE_H)
-    let escapeY = topY - CLEAR - LANE_STEP
+        let sx = ax + CLEAR
+        let tx = endX - CLEAR
+        // Prefer an escape lane above both nodes; fallback to below if above is exhausted
+        const src = nodesRef.current.find(n => n.id === fromId)
+        const tgt = nodesRef.current.find(n => n.id === toId)
+        const topY = Math.min(src?.y ?? ay, tgt?.y ?? by)
+        const bottomY = Math.max((src?.y ?? ay) + NODE_H, (tgt?.y ?? by) + NODE_H)
+        let escapeY = topY - CLEAR - LANE_STEP
         let guard = 0
         let changed = true
         while (changed && guard++ < 80) {
@@ -472,68 +474,103 @@ export default function WorkflowEditor({ value, onChange, height = 480 }: { valu
                                 className="absolute inset-0"
                                 style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`, transformOrigin: '0 0' }}
                             >
-                            <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                                <defs>
-                                    <marker id="arrow" markerWidth="12" markerHeight="8" refX="12" refY="4" orient="auto" markerUnits="userSpaceOnUse">
-                                        <path d="M0,0 L12,4 L0,8 z" fill="#94a3b8" />
-                                    </marker>
-                                </defs>
-                                {routed.paths.map(p => (
-                                    <path key={p.id} d={p.d} stroke="#94a3b8" strokeWidth={2.5} fill="none" markerEnd="url(#arrow)" strokeLinecap="round" strokeLinejoin="round" />
-                                ))}
-                                {connect && (() => {
-                                    const src = nodes.find(n => n.id === connect!.fromId)
-                                    if (!src) return null
-                                    const ax = src.x + NODE_W, ay = src.y + NODE_H / 2
-                                    const bx = connect!.x, by = connect!.y
-                                    // Use copies so preview doesn't reserve lanes
-                                    const usedYs = new Set<number>(routed.usedYs)
-                                    const usedXs = new Set<number>(routed.usedXs)
-                                    const perEdgeObstacles = routed.accEdgeRects.concat(routed.nodeRects.filter(r => r.id !== src.id))
-                                    const res = route(ax, ay, bx, by, src.id, undefined, perEdgeObstacles, usedYs, usedXs)
-                                    return <path d={res.d} stroke="#f59e0b" strokeWidth={2} fill="none" markerEnd="url(#arrow)" strokeLinecap="round" strokeLinejoin="round" />
-                                })()}
-                            </svg>
-
-                            {nodes.map(n => (
-                                <div key={n.id}
-                                    className={`absolute select-none rounded-md shadow-md border`}
-                                    style={{ left: n.x, top: n.y }}
-                                    onMouseDown={(e) => onMouseDownNode(e, n.id)}
-                                    onContextMenu={(e) => { e.preventDefault(); openMenu(n.id, e.clientX, e.clientY) }}
-                                    onTouchStart={(e) => {
-                                        if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current)
-                                        const touch = e.touches[0]
-                                        longPressTimerRef.current = window.setTimeout(() => openMenu(n.id, touch.clientX, touch.clientY), 600)
-                                    }}
-                                    onTouchEnd={() => { if (longPressTimerRef.current) { window.clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null } }}
+                                <svg
+                                    className="absolute inset-0 w-full h-full"
+                                    onMouseDown={() => { /* prevent background panning starting when clicking empty svg */ }}
+                                    onClick={() => setSelectedEdgeId(null)}
                                 >
-                                    <div
-                                        className="relative"
-                                        style={{ width: NODE_W, height: NODE_H, background: '#ffffff', borderColor: '#d1d5db', borderRadius: 10 }}
+                                    <defs>
+                                        <marker id="arrow-default" markerWidth="12" markerHeight="8" refX="12" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                                            <path d="M0,0 L12,4 L0,8 z" fill="#94a3b8" />
+                                        </marker>
+                                        <marker id="arrow-selected" markerWidth="12" markerHeight="8" refX="12" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+                                            <path d="M0,0 L12,4 L0,8 z" fill="#22c55e" />
+                                        </marker>
+                                    </defs>
+                                    {routed.paths.map(p => {
+                                        const selected = selectedEdgeId === p.id
+                                        const color = selected ? '#22c55e' : '#94a3b8'
+                                        const width = selected ? 3.5 : 2.5
+                                        const marker = selected ? 'url(#arrow-selected)' : 'url(#arrow-default)'
+                                        return (
+                                            <g key={p.id}>
+                                                {/* wide invisible hit area for easy clicking */}
+                                                <path
+                                                    d={p.d}
+                                                    stroke="transparent"
+                                                    strokeWidth={14}
+                                                    fill="none"
+                                                    onClick={(e) => { e.stopPropagation(); setSelectedEdgeId(prev => prev === p.id ? null : p.id) }}
+                                                    style={{ cursor: 'pointer' }}
+                                                />
+                                                {/* visible edge */}
+                                                <path
+                                                    d={p.d}
+                                                    stroke={color}
+                                                    strokeWidth={width}
+                                                    fill="none"
+                                                    markerEnd={marker}
+                                                    strokeLinecap="round"
+                                                    strokeLinejoin="round"
+                                                    style={selected ? { filter: 'drop-shadow(0 0 2px #22c55e)' } : undefined}
+                                                />
+                                            </g>
+                                        )
+                                    })}
+                                    {connect && (() => {
+                                        const src = nodes.find(n => n.id === connect!.fromId)
+                                        if (!src) return null
+                                        const ax = src.x + NODE_W, ay = src.y + NODE_H / 2
+                                        const bx = connect!.x, by = connect!.y
+                                        // Use copies so preview doesn't reserve lanes
+                                        const usedYs = new Set<number>(routed.usedYs)
+                                        const usedXs = new Set<number>(routed.usedXs)
+                                        const perEdgeObstacles = routed.accEdgeRects.concat(routed.nodeRects.filter(r => r.id !== src.id))
+                                        const res = route(ax, ay, bx, by, src.id, undefined, perEdgeObstacles, usedYs, usedXs)
+                                        return <path d={res.d} stroke="#f59e0b" strokeWidth={2} fill="none" markerEnd="url(#arrow-default)" strokeLinecap="round" strokeLinejoin="round" />
+                                    })()}
+                                </svg>
+
+                                {nodes.map(n => (
+                                    <div key={n.id}
+                                        className={`absolute select-none rounded-md shadow-md border`}
+                                        style={{ left: n.x, top: n.y }}
+                                        onMouseDown={(e) => { setSelectedEdgeId(null); onMouseDownNode(e, n.id) }}
+                                        onContextMenu={(e) => { e.preventDefault(); openMenu(n.id, e.clientX, e.clientY) }}
+                                        onTouchStart={(e) => {
+                                            if (longPressTimerRef.current) window.clearTimeout(longPressTimerRef.current)
+                                            const touch = e.touches[0]
+                                            longPressTimerRef.current = window.setTimeout(() => openMenu(n.id, touch.clientX, touch.clientY), 600)
+                                        }}
+                                        onTouchEnd={() => { if (longPressTimerRef.current) { window.clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null } }}
                                     >
-                                        {/* left target handle */}
-                                        <div className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-slate-400" />
-                                        {/* right source handle */}
-                                        <button
-                                            type="button"
-                                            className="absolute -right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-slate-400 hover:bg-yellow-400 cursor-crosshair"
-                                            onMouseDown={(e) => {
-                                                e.stopPropagation()
-                                                setConnect({ fromId: n.id, x: n.x + NODE_W, y: n.y + NODE_H / 2 })
-                                            }}
-                                            aria-label="Start connection"
-                                        />
-                                        {/* label inside node */}
-                                        <input
-                                            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100%-16px)] text-center bg-transparent outline-none text-sm text-gray-900"
-                                            value={n.label}
-                                            onMouseDown={(e) => e.stopPropagation()}
-                                            onChange={(e) => setNodes(prev => prev.map(x => x.id === n.id ? { ...x, label: e.target.value } : x))}
-                                        />
+                                        <div
+                                            className="relative"
+                                            style={{ width: NODE_W, height: NODE_H, background: '#ffffff', borderColor: '#d1d5db', borderRadius: 10 }}
+                                        >
+                                            {/* left target handle */}
+                                            <div className="absolute -left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-slate-400" />
+                                            {/* right source handle */}
+                                            <button
+                                                type="button"
+                                                className="absolute -right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-slate-400 hover:bg-yellow-400 cursor-crosshair"
+                                                onMouseDown={(e) => {
+                                                    e.stopPropagation()
+                                                    setSelectedEdgeId(null)
+                                                    setConnect({ fromId: n.id, x: n.x + NODE_W, y: n.y + NODE_H / 2 })
+                                                }}
+                                                aria-label="Start connection"
+                                            />
+                                            {/* label inside node */}
+                                            <input
+                                                className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[calc(100%-16px)] text-center bg-transparent outline-none text-sm text-gray-900"
+                                                value={n.label}
+                                                onMouseDown={(e) => e.stopPropagation()}
+                                                onChange={(e) => setNodes(prev => prev.map(x => x.id === n.id ? { ...x, label: e.target.value } : x))}
+                                            />
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                ))}
                             </div>
 
                             {menu && (

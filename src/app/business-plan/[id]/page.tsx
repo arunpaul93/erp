@@ -7,7 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import StrategyCanvas from '@/components/StrategyCanvas'
 import type { CanvasData } from '@/components/StrategyCanvas'
-import WorkflowEditor, { type WorkflowGraph } from '@/components/WorkflowEditor'
+import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
 
 export default function BusinessPlanDetailPage() {
   const router = useRouter()
@@ -227,7 +227,7 @@ export default function BusinessPlanDetailPage() {
 
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                  <WorkflowEditor value={operationalWorkflow} onChange={setOperationalWorkflow} height={480} />
+                  <OperationalFlowEditor value={operationalWorkflow} onChange={setOperationalWorkflow} height={480} />
                 </div>
 
 
