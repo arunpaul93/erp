@@ -17,6 +17,8 @@ import ReactFlow, {
     useNodesState,
     Handle,
     Position,
+    getBezierPath,
+    getSmoothStepPath,
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 
@@ -27,6 +29,12 @@ export type WorkflowGraph = { nodes: WfNode[]; edges: WfEdge[] }
 const GRID_SIZE = 16
 const NODE_REPEL_GAP = 60 // minimum px gap between node rectangles
 const EDGE_REPEL_GAP = 20 // edge clearance from non-endpoint nodes and exempt length at endpoints
+
+// Constants for backward edge routing
+const EDGE_PADDING_BOTTOM = 130 // vertical padding downwards
+const EDGE_PADDING_X = 40 // horizontal offset to avoid overlapping
+const EDGE_BORDER_RADIUS = 16 // bend radius for rounded corners
+const HANDLE_SIZE = 20 // handle fudge factor
 
 function toRF(value?: WorkflowGraph | null): { nodes: RFNode[]; edges: RFEdge[] } {
     const nodes: RFNode[] = (value?.nodes ?? []).map(n => ({
@@ -95,156 +103,146 @@ export default function OperationalFlowEditor({
     const lastFromPropsRef = React.useRef<string | null>(null)
     const lastEmittedRef = React.useRef<string | null>(null)
 
-    // helpers for obstacle-avoiding Bezier routing
-    type Rect = { id: string; x: number; y: number; w: number; h: number }
-    type Pt = { x: number; y: number }
-
-    const pointInRect = (p: Pt, r: Rect): boolean => p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h
-    const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
-    const nearestPointOnRect = (p: Pt, r: Rect): Pt => ({ x: clamp(p.x, r.x, r.x + r.w), y: clamp(p.y, r.y, r.y + r.h) })
-    const cubicPoint = (p0: Pt, p1: Pt, p2: Pt, p3: Pt, t: number): Pt => {
-        const u = 1 - t
-        const tt = t * t
-        const uu = u * u
-        const uuu = uu * u
-        const ttt = tt * t
-        return {
-            x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x,
-            y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y,
-        }
-    }
-
-    const approxBezierLength = (p0: Pt, p1: Pt, p2: Pt, p3: Pt, steps = 48): number => {
-        let len = 0
-        let prev = p0
-        for (let i = 1; i <= steps; i++) {
-            const t = i / steps
-            const pt = cubicPoint(p0, p1, p2, p3, t)
-            len += Math.hypot(pt.x - prev.x, pt.y - prev.y)
-            prev = pt
-        }
-        return len
-    }
-
-    const findTForDistanceFromStart = (p0: Pt, p1: Pt, p2: Pt, p3: Pt, distance: number, steps = 48): number => {
-        let acc = 0
-        let prev = p0
-        for (let i = 1; i <= steps; i++) {
-            const t = i / steps
-            const pt = cubicPoint(p0, p1, p2, p3, t)
-            acc += Math.hypot(pt.x - prev.x, pt.y - prev.y)
-            if (acc >= distance) return t
-            prev = pt
-        }
-        return 1
-    }
-
-    const findTForDistanceFromEnd = (p0: Pt, p1: Pt, p2: Pt, p3: Pt, distance: number, steps = 48): number => {
-        let acc = 0
-        let prev = p3
-        for (let i = 1; i <= steps; i++) {
-            const t = 1 - i / steps
-            const pt = cubicPoint(p0, p1, p2, p3, t)
-            acc += Math.hypot(pt.x - prev.x, pt.y - prev.y)
-            if (acc >= distance) return t
-            prev = pt
-        }
-        return 0
-    }
-
     const HLEdge = React.useCallback((props: EdgeProps) => {
         const selected = (props as any).selected || (props as any).data?.selected
         const color = selected ? '#22c55e' : '#94a3b8'
         const width = selected ? 4 : 2
-        const obstacles: Rect[] = (((props as any).data?.obstacles as Rect[]) || [])
-        // create inflated obstacles by EDGE_REPEL_GAP
-        const inflated = obstacles.map(r => ({ id: r.id, x: r.x - EDGE_REPEL_GAP, y: r.y - EDGE_REPEL_GAP, w: r.w + EDGE_REPEL_GAP * 2, h: r.h + EDGE_REPEL_GAP * 2 }))
 
         const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = props
-        const dirFromPos = (pos: any): Pt => {
-            switch (pos) {
-                case Position.Left: return { x: -1, y: 0 }
-                case Position.Right: return { x: 1, y: 0 }
-                case Position.Top: return { x: 0, y: -1 }
-                case Position.Bottom: return { x: 0, y: 1 }
-                default: return { x: 0, y: 0 }
-            }
-        }
-        const sdir = dirFromPos(sourcePosition)
-        const tdir = dirFromPos(targetPosition)
-        // Endpoints stay at the handles; exemption zones are applied during control nudging only
-        const start: Pt = { x: sourceX, y: sourceY }
-        const end: Pt = { x: targetX, y: targetY }
+        
+        // Determine if this is a backward connection (source is to the right of target)
+        const isBackward = sourceX > targetX
 
-        // initial control points along handle directions
-        const dist = Math.hypot(end.x - start.x, end.y - start.y)
-        const base = clamp(dist * 0.4, 60, 240)
-        let c1: Pt = { x: start.x + sdir.x * base, y: start.y + sdir.y * base }
-        let c2: Pt = { x: end.x + tdir.x * base, y: end.y + tdir.y * base }
+        let path: string
+        let labelX: number
+        let labelY: number
 
-        // nudge controls away from obstacles by sampling points on the curve,
-        // skipping the first/last EDGE_REPEL_GAP px along the curve length
-        // compute provisional t-range that corresponds to the first/last EDGE_REPEL_GAP px
-        const tStart = findTForDistanceFromStart(start, c1, c2, end, EDGE_REPEL_GAP)
-        const tEnd = findTForDistanceFromEnd(start, c1, c2, end, EDGE_REPEL_GAP)
-        const a = clamp(tStart, 0, 0.9)
-        const b = clamp(tEnd, 0.1, 1)
-        const lo = Math.min(a, 0.95)
-        const hi = Math.max(b, 0.05)
-        const range = Math.max(0, hi - lo)
-        const sampleCount = range > 0.5 ? 7 : range > 0.25 ? 5 : range > 0.1 ? 3 : 2
-        const samples: number[] = []
-        for (let i = 0; i < sampleCount; i++) {
-            const t = lo + (i / (sampleCount - 1)) * (hi - lo)
-            samples.push(clamp(t, 0.05, 0.95))
-        }
-        const maxIter = 8
-        for (let iter = 0; iter < maxIter; iter++) {
-            let adjusted = false
-            for (const t of samples) {
-                const p = cubicPoint(start, c1, c2, end, t)
-                // accumulate pushes from all intersecting obstacles for smoother avoidance
-                let offX = 0
-                let offY = 0
-                for (const r of inflated) {
-                    if (!pointInRect(p, r)) continue
-                    // reference point = nearest point on rectangle boundary to p
-                    const nearest = nearestPointOnRect(p, r)
-                    let vx = p.x - nearest.x
-                    let vy = p.y - nearest.y
-                    let vlen = Math.hypot(vx, vy)
-                    if (vlen < 0.0001) {
-                        // if exactly on boundary center, fallback to outward normal of closest side
-                        const dl = Math.abs(p.x - r.x)
-                        const dr = Math.abs((r.x + r.w) - p.x)
-                        const dt = Math.abs(p.y - r.y)
-                        const db = Math.abs((r.y + r.h) - p.y)
-                        const m = Math.min(dl, dr, dt, db)
-                        if (m === dl) { vx = -1; vy = 0 }
-                        else if (m === dr) { vx = 1; vy = 0 }
-                        else if (m === dt) { vx = 0; vy = -1 }
-                        else { vx = 0; vy = 1 }
-                        vlen = 1
-                    }
-                    const push = (EDGE_REPEL_GAP + 12)
-                    offX += (vx / vlen) * push
-                    offY += (vy / vlen) * push
+        if (isBackward) {
+            // Backward connection: generate from both ends with smooth curves and proper segments
+            const minSegmentLength = 40 // Minimum 40px between bends
+            const nodeWidth = 200 // Estimated node width
+            const curveRadius = 20 // Radius for smooth curves instead of 90-degree bends
+            
+            // Calculate safe exit and entry points
+            const sourceExitX = sourceX + Math.max(minSegmentLength, EDGE_PADDING_X)
+            const sourceExitY = sourceY
+            
+            // Ensure target entry point is well outside the target node bounds
+            const targetLeftEdge = targetX - (nodeWidth / 2) // Approximate left edge of target node
+            const safeApproachDistance = Math.max(minSegmentLength, EDGE_PADDING_X + 20) // Extra clearance
+            const targetEntryX = Math.min(targetLeftEdge - safeApproachDistance, sourceExitX - minSegmentLength)
+            const targetEntryY = targetY
+            
+            // Create smooth path with curves instead of sharp 90-degree bends
+            let pathCommands: string[] = []
+            
+            // Start at source handle
+            pathCommands.push(`M ${sourceX} ${sourceY}`)
+            
+            if (sourceY === targetY) {
+                // Same Y level: create path that goes below the nodes with rounded corners
+                const curveHeight = 60 // How far the path extends vertically
+                const cornerRadius = 8 // Radius for rounded corners
+                const midX = (sourceExitX + targetEntryX) / 2
+                
+                // Create a path with rounded corners
+                pathCommands.push(`L ${sourceExitX - cornerRadius} ${sourceY}`)
+                
+                // Rounded corner down-right
+                pathCommands.push(`Q ${sourceExitX} ${sourceY} ${sourceExitX} ${sourceY + cornerRadius}`)
+                
+                // Straight line down
+                pathCommands.push(`L ${sourceExitX} ${sourceY + curveHeight - cornerRadius}`)
+                
+                // Rounded corner down-left 
+                pathCommands.push(`Q ${sourceExitX} ${sourceY + curveHeight} ${sourceExitX - cornerRadius} ${sourceY + curveHeight}`)
+                
+                // Horizontal bridge at the bottom
+                pathCommands.push(`L ${targetEntryX + cornerRadius} ${sourceY + curveHeight}`)
+                
+                // Rounded corner up-left
+                pathCommands.push(`Q ${targetEntryX} ${sourceY + curveHeight} ${targetEntryX} ${sourceY + curveHeight - cornerRadius}`)
+                
+                // Straight line back up
+                pathCommands.push(`L ${targetEntryX} ${sourceY + cornerRadius}`)
+                
+                // Rounded corner up-right
+                pathCommands.push(`Q ${targetEntryX} ${sourceY} ${targetEntryX + cornerRadius} ${sourceY}`)
+                
+                // Final approach to target
+                pathCommands.push(`L ${targetX} ${targetY}`)
+                
+                labelX = midX
+                labelY = sourceY + curveHeight / 2
+            } else {
+                // Different Y levels: use vertical routing with rounded corners
+                const verticalOffset = Math.max(EDGE_PADDING_BOTTOM, Math.abs(targetY - sourceY) + 50)
+                const middleY = sourceY + (sourceY < targetY ? verticalOffset : -verticalOffset)
+                const cornerRadius = 8 // Radius for rounded corners
+                const middleX = (sourceExitX + targetEntryX) / 2
+                
+                // Source side: horizontal exit
+                pathCommands.push(`L ${sourceExitX - cornerRadius} ${sourceExitY}`)
+                
+                // Rounded corner for vertical transition
+                if (sourceY < targetY) {
+                    // Going down
+                    pathCommands.push(`Q ${sourceExitX} ${sourceExitY} ${sourceExitX} ${sourceExitY + cornerRadius}`)
+                    pathCommands.push(`L ${sourceExitX} ${middleY - cornerRadius}`)
+                    pathCommands.push(`Q ${sourceExitX} ${middleY} ${sourceExitX - cornerRadius} ${middleY}`)
+                } else {
+                    // Going up
+                    pathCommands.push(`Q ${sourceExitX} ${sourceExitY} ${sourceExitX} ${sourceExitY - cornerRadius}`)
+                    pathCommands.push(`L ${sourceExitX} ${middleY + cornerRadius}`)
+                    pathCommands.push(`Q ${sourceExitX} ${middleY} ${sourceExitX - cornerRadius} ${middleY}`)
                 }
-                if (offX !== 0 || offY !== 0) {
-                    if (t <= 0.5) c1 = { x: c1.x + offX, y: c1.y + offY }
-                    else c2 = { x: c2.x + offX, y: c2.y + offY }
-                    adjusted = true
+                
+                // Middle horizontal bridge with minimum segment length
+                if (Math.abs(sourceExitX - targetEntryX) >= minSegmentLength) {
+                    pathCommands.push(`L ${targetEntryX + cornerRadius} ${middleY}`)
                 }
+                
+                // Rounded corner for target side vertical transition
+                if (sourceY < targetY) {
+                    // Coming from below
+                    pathCommands.push(`Q ${targetEntryX} ${middleY} ${targetEntryX} ${middleY - cornerRadius}`)
+                    pathCommands.push(`L ${targetEntryX} ${targetY + cornerRadius}`)
+                    pathCommands.push(`Q ${targetEntryX} ${targetY} ${targetEntryX + cornerRadius} ${targetY}`)
+                } else {
+                    // Coming from above
+                    pathCommands.push(`Q ${targetEntryX} ${middleY} ${targetEntryX} ${middleY + cornerRadius}`)
+                    pathCommands.push(`L ${targetEntryX} ${targetY - cornerRadius}`)
+                    pathCommands.push(`Q ${targetEntryX} ${targetY} ${targetEntryX + cornerRadius} ${targetY}`)
+                }
+                
+                // Final approach to target handle
+                pathCommands.push(`L ${targetX} ${targetY}`)
+                
+                labelX = middleX
+                labelY = middleY
             }
-            if (!adjusted) break
+            
+            path = pathCommands.join(' ')
+        } else {
+            // Forward connection: use Bezier curve
+            const [bezierPath, labelPosX, labelPosY] = getBezierPath({
+                sourceX,
+                sourceY,
+                sourcePosition,
+                targetX,
+                targetY,
+                targetPosition,
+            })
+            
+            path = bezierPath
+            labelX = labelPosX
+            labelY = labelPosY
         }
-
-        const d = `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`
 
         return (
             <BaseEdge
                 id={(props as any).id}
-                path={d}
+                path={path}
                 markerEnd={(props as any).markerEnd}
                 style={{
                     ...(props.style || {}),
