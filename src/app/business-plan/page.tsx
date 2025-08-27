@@ -137,11 +137,6 @@ export default function BusinessPlanPage() {
                                                     )}
                                                 </div>
                                                 <div className="flex items-center gap-2">
-                                                    {item.created_at && (
-                                                        <span className="text-[10px] px-2 py-1 rounded bg-gray-800 text-gray-400 border border-gray-700">
-                                                            Created on {new Date(item.created_at).toLocaleDateString()}
-                                                        </span>
-                                                    )}
                                                     <button
                                                         className="text-yellow-300 hover:text-yellow-200 text-xs border border-yellow-400/40 hover:border-yellow-400 px-2 py-1 rounded"
                                                         onClick={(e) => {
@@ -151,6 +146,11 @@ export default function BusinessPlanPage() {
                                                     >
                                                         Manage budgets
                                                     </button>
+                                                    {item.created_at && (
+                                                        <span className="text-[10px] px-2 py-1 rounded bg-gray-800 text-gray-400 border border-gray-700">
+                                                            Created on {new Date(item.created_at).toLocaleDateString()}
+                                                        </span>
+                                                    )}
                                                     <button
                                                         className="text-red-300 hover:text-red-200 text-xs border border-red-400/40 hover:border-red-400 px-2 py-1 rounded"
                                                         onClick={(e) => {
