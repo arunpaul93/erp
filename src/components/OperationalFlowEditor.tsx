@@ -695,9 +695,9 @@ function OperationalFlowEditorInner({
         setHistoryLen(historyRef.current.length)
         setFutureLen(0)
         const id = Math.random().toString(36).slice(2, 9)
-        
+
         let position = { x: 0, y: 0 }
-        
+
         if (providedPosition) {
             // Use the provided position (e.g., from connection drop)
             position = providedPosition
@@ -713,7 +713,7 @@ function OperationalFlowEditorInner({
                 position = { x: (nodes.length % 6) * 200, y: Math.floor(nodes.length / 6) * 120 }
             }
         }
-        
+
         // apply repulsion against current nodes for initial placement
         const repelled = resolveRepelledPosition(id, position, nodes as RFNode[])
         setNodes((prev) => [...prev, { id, type: 'editable', position: repelled, data: { label: `Step ${prev.length + 1}` } }])
@@ -750,13 +750,13 @@ function OperationalFlowEditorInner({
                 // Create a new node at the drop position
                 const newNodeId = Math.random().toString(36).slice(2, 9)
                 const repelled = resolveRepelledPosition(newNodeId, position, nodes as RFNode[])
-                
+
                 // Add the new node
-                setNodes((prev) => [...prev, { 
-                    id: newNodeId, 
-                    type: 'editable', 
-                    position: repelled, 
-                    data: { label: `Step ${prev.length + 1}` } 
+                setNodes((prev) => [...prev, {
+                    id: newNodeId,
+                    type: 'editable',
+                    position: repelled,
+                    data: { label: `Step ${prev.length + 1}` }
                 }])
 
                 // Create the connection from source to new node
@@ -1212,7 +1212,7 @@ function OperationalFlowEditorInner({
                                     // Deselect all nodes and edges
                                     setNodes(prev => prev.map(n => (n as any).selected ? { ...n, selected: false } : n))
                                     setEdges(prev => prev.map(e => (e as any).selected ? { ...e, selected: false } : e))
-                                    
+
                                     // Clear any node highlighting animations
                                     if (animationTimeoutRef.current) {
                                         clearTimeout(animationTimeoutRef.current)
