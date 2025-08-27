@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
+import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
 
 export default function BudgetDetailPage() {
   const router = useRouter()
@@ -16,6 +17,7 @@ export default function BudgetDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [workflowSteps, setWorkflowSteps] = useState<string[]>([])
+  const [operationalWorkflow, setOperationalWorkflow] = useState<WorkflowGraph | null>(null)
   // Global add-item form (no relation to steps)
   const [addOpen, setAddOpen] = useState(false)
   const [addType, setAddType] = useState<string>('')
@@ -29,6 +31,11 @@ export default function BudgetDetailPage() {
   const [cfgDraft, setCfgDraft] = useState<any | null>(null)
   const [cfgLoading, setCfgLoading] = useState(false)
   const [cfgError, setCfgError] = useState<string | null>(null)
+  const [cfgOpen, setCfgOpen] = useState(false)
+  const [cfgSaving, setCfgSaving] = useState(false)
+  const [cfgSaveSuccess, setCfgSaveSuccess] = useState(false)
+  const [budgetSaving, setBudgetSaving] = useState(false)
+  const [budgetSaveSuccess, setBudgetSaveSuccess] = useState(false)
   // Edit item state
   const [editOpenId, setEditOpenId] = useState<string | null>(null)
   const [editType, setEditType] = useState<string>('')
@@ -51,17 +58,40 @@ export default function BudgetDetailPage() {
       if (b?.business_plan_id) {
         const { data: bp } = await supabase.from('business_plan').select('operational_workflow').eq('id', b.business_plan_id).maybeSingle()
         if (bp) {
-          if (Array.isArray(bp.operational_workflow)) setWorkflowSteps(bp.operational_workflow as string[])
-          else if (typeof bp.operational_workflow === 'string') {
+          // Handle WorkflowGraph object for the visual editor
+          if (bp.operational_workflow && typeof bp.operational_workflow === 'object') {
+            setOperationalWorkflow(bp.operational_workflow as WorkflowGraph)
+          } else if (typeof bp.operational_workflow === 'string') {
             try {
               const parsed = JSON.parse(bp.operational_workflow)
-              if (Array.isArray(parsed)) setWorkflowSteps(parsed)
-              else setWorkflowSteps((bp.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+              if (parsed && typeof parsed === 'object' && (parsed.nodes || parsed.edges)) {
+                // It's a WorkflowGraph object
+                setOperationalWorkflow(parsed as WorkflowGraph)
+              } else if (Array.isArray(parsed)) {
+                // It's an array of step strings
+                setWorkflowSteps(parsed)
+                setOperationalWorkflow(null)
+              } else {
+                // It's a simple string, split by '>'
+                setWorkflowSteps((bp.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+                setOperationalWorkflow(null)
+              }
             } catch {
+              // Parsing failed, treat as simple string
               setWorkflowSteps((bp.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+              setOperationalWorkflow(null)
             }
+          } else {
+            setOperationalWorkflow(null)
+            setWorkflowSteps([])
           }
+        } else {
+          setOperationalWorkflow(null)
+          setWorkflowSteps([])
         }
+      } else {
+        setOperationalWorkflow(null)
+        setWorkflowSteps([])
       }
 
       const { data, error } = await supabase.from('budget_details').select('*').eq('budget_id', id).order('created_at', { ascending: false })
@@ -99,12 +129,30 @@ export default function BudgetDetailPage() {
   }, [id])
 
   const onSaveBudget = async () => {
-    if (!id || !budget) return
+    if (!id || !budget || budgetSaving) return
     if (!newName.trim()) return
+    
+    setBudgetSaving(true)
+    setBudgetSaveSuccess(false)
+    setError(null)
+    
     const { error } = await supabase.from('budget').update({ name: newName.trim() }).eq('id', id)
-    if (error) return setError(error.message)
+    
+    setBudgetSaving(false)
+    
+    if (error) {
+      setError(error.message)
+      return
+    }
+    
     setBudget((prev: any) => ({ ...prev, name: newName.trim() }))
     setNewName('')
+    setBudgetSaveSuccess(true)
+    
+    // Show success state for 2 seconds
+    setTimeout(() => {
+      setBudgetSaveSuccess(false)
+    }, 2000)
   }
 
   const deleteItem = async (itemId: string) => {
@@ -221,23 +269,75 @@ export default function BudgetDetailPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Rename" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                  <button onClick={onSaveBudget} className="bg-yellow-400 text-gray-900 px-3 py-2 rounded-md">Save</button>
-                  <button disabled={duplicating} onClick={duplicateBudget} className="bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-200 border border-gray-700 px-3 py-2 rounded-md">{duplicating ? 'Duplicating…' : 'Duplicate budget'}</button>
+                  <button 
+                    onClick={onSaveBudget} 
+                    disabled={budgetSaving || !newName.trim()}
+                    className={`px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2 ${
+                      budgetSaving 
+                        ? 'bg-yellow-300 text-gray-800 cursor-not-allowed' 
+                        : budgetSaveSuccess 
+                          ? 'bg-green-500 text-white' 
+                          : newName.trim()
+                            ? 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
+                            : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                    }`}
+                  >
+                    {budgetSaving ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-gray-800 border-t-transparent rounded-full animate-spin"></div>
+                        Saving...
+                      </>
+                    ) : budgetSaveSuccess ? (
+                      <>
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Saved!
+                      </>
+                    ) : (
+                      'Save'
+                    )}
+                  </button>
+                  <button 
+                    disabled={duplicating || budgetSaving} 
+                    onClick={duplicateBudget} 
+                    className="bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-200 border border-gray-700 px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2"
+                  >
+                    {duplicating ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+                        Duplicating…
+                      </>
+                    ) : (
+                      'Duplicate budget'
+                    )}
+                  </button>
                 </div>
               </div>
               {dupError && <div className="mt-2 text-xs text-red-400">{dupError}</div>}
               {newBudgetId && <div className="mt-2 text-xs text-green-400">Duplicated to <button className="underline" onClick={() => router.push(`/budget/${newBudgetId}`)}>open new budget</button>.</div>}
 
               <div className="mt-4">
-                <h3 className="text-sm text-gray-300 mb-2">Operational workflow steps</h3>
-                {workflowSteps.length === 0 ? (
-                  <div className="text-gray-400 text-sm">No workflow steps found on the linked business plan.</div>
+                <h3 className="text-sm text-gray-300 mb-2">Operational workflow</h3>
+                {operationalWorkflow ? (
+                  <div className="border border-gray-800 rounded-lg">
+                    <OperationalFlowEditor
+                      value={operationalWorkflow}
+                      height={400}
+                      onChange={undefined} // Read-only in budget context
+                    />
+                  </div>
+                ) : workflowSteps.length > 0 ? (
+                  <div>
+                    <p className="text-gray-400 text-sm mb-2">Legacy workflow steps:</p>
+                    <ul className="space-y-2">
+                      {workflowSteps.map((step, idx) => (
+                        <li key={idx} className="p-3 bg-gray-900/60 border border-gray-800 rounded text-gray-100">Step {idx + 1}: {step}</li>
+                      ))}
+                    </ul>
+                  </div>
                 ) : (
-                  <ul className="space-y-2">
-                    {workflowSteps.map((step, idx) => (
-                      <li key={idx} className="p-3 bg-gray-900/60 border border-gray-800 rounded text-gray-100">Step {idx + 1}: {step}</li>
-                    ))}
-                  </ul>
+                  <div className="text-gray-400 text-sm">No workflow found on the linked business plan.</div>
                 )}
               </div>
 
@@ -789,12 +889,31 @@ export default function BudgetDetailPage() {
       <section className="max-w-4xl mx-auto pb-12 sm:px-6 lg:px-8">
         <div className="px-4 sm:px-0">
           <div className="rounded-xl border border-gray-800 bg-gray-900/80 p-4 mt-4">
-            <h3 className="text-sm text-gray-300 mb-3">Budget config</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm text-gray-300">Budget config</h3>
+              {cfg && (
+                <button
+                  className="text-yellow-300 hover:text-yellow-400 text-xs transition-colors duration-200 flex items-center gap-1"
+                  onClick={() => {
+                    setCfgOpen(!cfgOpen)
+                    setCfgSaveSuccess(false) // Reset success state when toggling
+                    if (!cfgOpen && cfg) {
+                      setCfgDraft({ ...cfg })
+                    }
+                  }}
+                >
+                  <svg className={`w-3 h-3 transition-transform duration-200 ${cfgOpen ? 'rotate-180' : ''}`} fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                  {cfgOpen ? 'Close' : 'Edit config'}
+                </button>
+              )}
+            </div>
             {cfgLoading ? (
               <div className="text-gray-400 text-sm">Loading config…</div>
             ) : cfgError ? (
               <div className="text-red-400 text-sm">{cfgError}</div>
-            ) : !cfgDraft ? (
+            ) : !cfg ? (
               <div className="flex items-center justify-between">
                 <div className="text-gray-400 text-sm">No config for this budget.</div>
                 <button
@@ -808,6 +927,7 @@ export default function BudgetDetailPage() {
                       if (error) return setCfgError(error.message)
                       setCfg(data)
                       setCfgDraft(data ? { ...data } : null)
+                      setCfgOpen(true) // Open the config editor after creating
                     } catch (e: any) {
                       setCfgError(String(e?.message || e))
                     } finally {
@@ -816,8 +936,10 @@ export default function BudgetDetailPage() {
                   }}
                 >Create config</button>
               </div>
+            ) : !cfgOpen ? (
+              <div className="text-gray-400 text-sm transition-opacity duration-200">Config saved. Click 'Edit config' to modify.</div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-3 animate-fadeIn">
                 {Object.entries(cfgDraft)
                   .filter(([k]) => !['id', 'budget_id', 'created_at', 'updated_at'].includes(k))
                   .map(([key, val]) => {
@@ -876,10 +998,20 @@ export default function BudgetDetailPage() {
 
                 <div className="flex gap-2">
                   <button
-                    className="bg-yellow-400 text-gray-900 px-3 py-2 rounded-md"
+                    disabled={cfgSaving}
+                    className={`px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2 ${
+                      cfgSaving 
+                        ? 'bg-yellow-300 text-gray-800 cursor-not-allowed' 
+                        : cfgSaveSuccess 
+                          ? 'bg-green-500 text-white' 
+                          : 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
+                    }`}
                     onClick={async () => {
-                      if (!id || !cfgDraft) return
+                      if (!id || !cfgDraft || cfgSaving) return
+                      setCfgSaving(true)
                       setCfgError(null)
+                      setCfgSaveSuccess(false)
+                      
                       const payload: any = {}
                       for (const [k, v] of Object.entries(cfgDraft)) {
                         if (['id', 'budget_id', 'created_at', 'updated_at'].includes(k)) continue
@@ -903,17 +1035,51 @@ export default function BudgetDetailPage() {
                           .eq('budget_id', id)
                           .select('*')
                           .maybeSingle()
-                        if (error) return setCfgError(error.message)
+                        if (error) {
+                          setCfgError(error.message)
+                          setCfgSaving(false)
+                          return
+                        }
                         upserted = data
                       }
+                      
                       setCfg(upserted)
                       setCfgDraft(upserted ? { ...upserted } : null)
+                      setCfgSaving(false)
+                      setCfgSaveSuccess(true)
+                      
+                      // Show success state for 1.5 seconds, then close
+                      setTimeout(() => {
+                        setCfgSaveSuccess(false)
+                        setCfgOpen(false) // Close the config fields after saving
+                      }, 1500)
                     }}
-                  >Save config</button>
+                  >
+                    {cfgSaving ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-gray-800 border-t-transparent rounded-full animate-spin"></div>
+                        Saving...
+                      </>
+                    ) : cfgSaveSuccess ? (
+                      <>
+                        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                        Saved!
+                      </>
+                    ) : (
+                      'Save config'
+                    )}
+                  </button>
                   <button
-                    className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-2 rounded-md"
-                    onClick={() => setCfgDraft(cfg ? { ...cfg } : null)}
-                  >Reset</button>
+                    disabled={cfgSaving}
+                    className="bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-200 border border-gray-700 px-3 py-2 rounded-md transition-all duration-200"
+                    onClick={() => {
+                      setCfgDraft(cfg ? { ...cfg } : null)
+                      setCfgOpen(false) // Close the config fields
+                      setCfgSaveSuccess(false) // Reset success state
+                    }}
+                  >Cancel</button>
                 </div>
               </div>
             )}

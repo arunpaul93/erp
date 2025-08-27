@@ -83,18 +83,17 @@ export default function BudgetsForPlanPage() {
                         ) : (
                             <ul className="space-y-3">
                                 {budgets.map(b => (
-                                    <li key={b.id} className="p-4 flex items-start justify-between gap-6 rounded-lg border border-gray-800 bg-gray-900/60">
+                                    <li
+                                        key={b.id}
+                                        className="p-4 flex items-start justify-between gap-6 rounded-lg border border-gray-800 bg-gray-900/60 cursor-pointer hover:bg-gray-900/80 hover:border-gray-700 transition-colors"
+                                        onClick={() => router.push(`/budget/${b.id}`)}
+                                    >
                                         <div>
                                             <div className="text-gray-100 font-medium">{b.name}</div>
                                             <div className="text-gray-400 text-sm mt-0.5">{b.period_start ? `${new Date(b.period_start).toLocaleDateString()} — ${new Date(b.period_end).toLocaleDateString()}` : ''}</div>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                className="text-yellow-300 hover:text-yellow-200 text-xs border border-yellow-400/40 hover:border-yellow-400 px-2 py-1 rounded"
-                                                onClick={() => router.push(`/budget/${b.id}`)}
-                                            >
-                                                Open
-                                            </button>
+                                        <div className="text-gray-400 text-xs">
+                                            Click to open →
                                         </div>
                                     </li>
                                 ))}

@@ -1062,18 +1062,18 @@ function OperationalFlowEditorInner({
     // Auto-save workflow after 3 seconds of inactivity
     React.useEffect(() => {
         if (!onSave || !businessPlanId) return
-        
+
         const timeoutId = setTimeout(async () => {
             try {
                 const currentWorkflow = fromRF(nodes as any, edges as any)
                 const currentWorkflowStr = norm(currentWorkflow)
-                
+
                 // Only auto-save if:
                 // 1. There are actual nodes or edges
                 // 2. The workflow has changed since last auto-save
-                if ((currentWorkflow.nodes.length > 0 || currentWorkflow.edges.length > 0) && 
+                if ((currentWorkflow.nodes.length > 0 || currentWorkflow.edges.length > 0) &&
                     lastAutoSavedRef.current !== currentWorkflowStr) {
-                    
+
                     await onSave(currentWorkflow)
                     lastAutoSavedRef.current = currentWorkflowStr
                     console.log('Auto-saved workflow')

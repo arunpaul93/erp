@@ -33,7 +33,7 @@ export default function NewBusinessPlanPage() {
     const [currentPlanId, setCurrentPlanId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [canvas, setCanvas] = useState<CanvasData | null>(null)
-    
+
     // Ref to ensure we only save once
     const hasAutoSavedRef = useRef(false)
 
