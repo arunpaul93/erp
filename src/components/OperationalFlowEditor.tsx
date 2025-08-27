@@ -3,7 +3,6 @@
 import React from 'react'
 import ReactFlow, {
     Controls,
-    MiniMap,
     Connection,
     Edge as RFEdge,
     EdgeProps,
@@ -15,6 +14,8 @@ import ReactFlow, {
     addEdge,
     useEdgesState,
     useNodesState,
+    useReactFlow,
+    ReactFlowProvider,
     Handle,
     Position,
     getBezierPath,
@@ -75,7 +76,8 @@ const norm = (g: WorkflowGraph) => JSON.stringify({
     edges: [...(g.edges || [])].map(e => ({ id: e.id, from: e.from, to: e.to })).sort((a, b) => (a.from === b.from ? a.to.localeCompare(b.to) : a.from.localeCompare(b.from)))
 })
 
-export default function OperationalFlowEditor({
+// Inner component that uses useReactFlow
+function OperationalFlowEditorInner({
     value,
     onChange,
     height = 480,
@@ -94,11 +96,12 @@ export default function OperationalFlowEditor({
 
     const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes)
     const [edges, setEdges, onEdgesChange] = useEdgesState(initial.edges)
+    const reactFlowInstance = useReactFlow()
     const [open, setOpen] = React.useState(false)
     const showPreview = false
     const rfRef = React.useRef<any | null>(null)
     const containerRef = React.useRef<HTMLDivElement | null>(null)
-    
+
     // Animation state for node click highlighting
     const [highlightedNodeId, setHighlightedNodeId] = React.useState<string | null>(null)
     const [animatingConnections, setAnimatingConnections] = React.useState<Set<string>>(new Set())
@@ -106,7 +109,14 @@ export default function OperationalFlowEditor({
     const [targetAnimationDelays, setTargetAnimationDelays] = React.useState<Map<string, number>>(new Map())
     const animationTimeoutRef = React.useRef<NodeJS.Timeout | null>(null)
     const targetTimeoutsRef = React.useRef<Map<string, NodeJS.Timeout>>(new Map())
-    
+
+    // Connection state tracking for drag-to-create functionality
+    const [connectionStart, setConnectionStart] = React.useState<{
+        nodeId: string;
+        handleId?: string | null;
+        handleType?: string;
+    } | null>(null)
+
     // menu/context actions removed for a simpler, reliable rename UX
 
     const lastFromPropsRef = React.useRef<string | null>(null)
@@ -117,11 +127,11 @@ export default function OperationalFlowEditor({
         const isAnimating = animatingConnections.has(props.id)
         // Highlight all forward connections in the workflow path
         const isForwardConnection = isAnimating
-        
+
         // Enhanced coloring and width for animations
         let color = '#94a3b8' // default gray
         let width = 2 // default width
-        
+
         if (selected) {
             color = '#22c55e' // green for selected
             width = 4
@@ -271,8 +281,8 @@ export default function OperationalFlowEditor({
                         ...(props.style || {}),
                         stroke: color,
                         strokeWidth: width,
-                        filter: selected ? 'drop-shadow(0 0 3px #22c55e)' : 
-                               (isAnimating || isForwardConnection) ? 'drop-shadow(0 0 4px #3b82f6)' : undefined,
+                        filter: selected ? 'drop-shadow(0 0 3px #22c55e)' :
+                            (isAnimating || isForwardConnection) ? 'drop-shadow(0 0 4px #3b82f6)' : undefined,
                         pointerEvents: 'stroke',
                         strokeLinecap: 'round',
                         strokeLinejoin: 'round',
@@ -352,7 +362,7 @@ export default function OperationalFlowEditor({
             if (animationTimeoutRef.current) {
                 clearTimeout(animationTimeoutRef.current)
             }
-            
+
             // Clear any existing target timeouts
             targetTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
             targetTimeoutsRef.current.clear()
@@ -369,7 +379,7 @@ export default function OperationalFlowEditor({
         if (animationTimeoutRef.current) {
             clearTimeout(animationTimeoutRef.current)
         }
-        
+
         // Clear any existing target timeouts
         targetTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
         targetTimeoutsRef.current.clear()
@@ -390,15 +400,15 @@ export default function OperationalFlowEditor({
 
             // Find all outgoing edges from current node
             const outgoingEdges = edges.filter(edge => (edge as any).source === currentNodeId)
-            
+
             for (const edge of outgoingEdges) {
                 const targetId = (edge as any).target
                 allForwardConnections.add(edge.id)
-                
+
                 if (!visitedNodes.has(targetId)) {
                     allForwardTargets.add(targetId)
                     nodeQueue.push(targetId)
-                    
+
                     // Assign staggered delays based on distance from source
                     if (!targetDelayMap.has(targetId)) {
                         currentDelay += 400 // Slightly longer delay for better visualization of deep paths
@@ -421,7 +431,7 @@ export default function OperationalFlowEditor({
             const timeout = setTimeout(() => {
                 setAnimatingTargets(prev => new Set([...prev, targetId]))
             }, delay)
-            
+
             targetTimeoutsRef.current.set(targetId, timeout)
         })
 
@@ -506,7 +516,7 @@ export default function OperationalFlowEditor({
                     if (clickTimeoutRef.current) {
                         clearTimeout(clickTimeoutRef.current);
                     }
-                    
+
                     // Set a timeout for single click action
                     clickTimeoutRef.current = setTimeout(() => {
                         // Only trigger animation if not in editing mode
@@ -518,9 +528,9 @@ export default function OperationalFlowEditor({
                 }}
                 style={{
                     background: 'white',
-                    border: selected ? '3px solid #22c55e' : 
-                           isHighlighted ? '3px solid #3b82f6' :
-                           isTarget ? '3px solid #f59e0b' : '2px solid #e2e8f0',
+                    border: selected ? '3px solid #22c55e' :
+                        isHighlighted ? '3px solid #3b82f6' :
+                            isTarget ? '3px solid #f59e0b' : '2px solid #e2e8f0',
                     borderRadius: 8,
                     minWidth: 200,
                     minHeight: 60,
@@ -533,7 +543,7 @@ export default function OperationalFlowEditor({
                     transform: selected ? 'scale(1.02)' : 'scale(1)',
                     transition: 'all 0.3s ease-in-out',
                     animation: isHighlighted ? 'pulse-blue 2s ease-in-out infinite' :
-                              isTarget ? 'pulse-orange 1.8s ease-in-out infinite' : undefined,
+                        isTarget ? 'pulse-orange 1.8s ease-in-out infinite' : undefined,
                 }}
             >
                 <Handle type="target" position={Position.Left} style={{ width: 10, height: 10, background: '#94a3b8', left: 0, top: '50%', transform: 'translate(-50%, -50%)' }} />
@@ -664,11 +674,20 @@ export default function OperationalFlowEditor({
             setEdges((eds: RFEdge[]) =>
                 addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed }, type: 'hl' }, eds),
             )
+            // Clear connection start state after successful connection
+            setConnectionStart(null)
         },
         [nodes, edges, setEdges],
     )
 
-    const addNode = React.useCallback(() => {
+    const onConnectStart = React.useCallback(
+        (event: any, { nodeId, handleId, handleType }: any) => {
+            setConnectionStart({ nodeId, handleId, handleType })
+        },
+        [],
+    )
+
+    const addNode = React.useCallback((providedPosition?: { x: number; y: number }) => {
         // record state before add
         const prev = fromRF(nodes as any, edges as any)
         historyRef.current.push(prev)
@@ -676,21 +695,89 @@ export default function OperationalFlowEditor({
         setHistoryLen(historyRef.current.length)
         setFutureLen(0)
         const id = Math.random().toString(36).slice(2, 9)
-        // Place near viewport center if possible
+        
         let position = { x: 0, y: 0 }
-        const rect = containerRef.current?.getBoundingClientRect()
-        if (rfRef.current && rect) {
-            const local = { x: rect.width / 2, y: rect.height / 2 }
-            const p = rfRef.current.project(local)
-            position = { x: Math.round(p.x), y: Math.round(p.y) }
+        
+        if (providedPosition) {
+            // Use the provided position (e.g., from connection drop)
+            position = providedPosition
         } else {
-            // fallback layout cascade
-            position = { x: (nodes.length % 6) * 200, y: Math.floor(nodes.length / 6) * 120 }
+            // Place near viewport center if possible
+            const rect = containerRef.current?.getBoundingClientRect()
+            if (rfRef.current && rect) {
+                const local = { x: rect.width / 2, y: rect.height / 2 }
+                const p = rfRef.current.project(local)
+                position = { x: Math.round(p.x), y: Math.round(p.y) }
+            } else {
+                // fallback layout cascade
+                position = { x: (nodes.length % 6) * 200, y: Math.floor(nodes.length / 6) * 120 }
+            }
         }
+        
         // apply repulsion against current nodes for initial placement
         const repelled = resolveRepelledPosition(id, position, nodes as RFNode[])
         setNodes((prev) => [...prev, { id, type: 'editable', position: repelled, data: { label: `Step ${prev.length + 1}` } }])
+        return id // Return the new node ID for potential connection
     }, [nodes, edges, setNodes, resolveRepelledPosition])
+
+    const onConnectEnd = React.useCallback(
+        (event: any) => {
+            // Only proceed if this is a valid drop event and we have connection start info
+            if (!event.target || !connectionStart) return
+
+            // Check if we dropped on empty space (not on a node)
+            const targetIsPane = event.target.classList.contains('react-flow__pane')
+            if (!targetIsPane) {
+                // Clear connection start state if not dropped on pane
+                setConnectionStart(null)
+                return
+            }
+
+            // Calculate position in the flow coordinate system  
+            const position = reactFlowInstance?.screenToFlowPosition({
+                x: event.clientX,
+                y: event.clientY,
+            })
+
+            if (position) {
+                // Record state before creating node and connection
+                const prev = fromRF(nodes as any, edges as any)
+                historyRef.current.push(prev)
+                futureRef.current = []
+                setHistoryLen(historyRef.current.length)
+                setFutureLen(0)
+
+                // Create a new node at the drop position
+                const newNodeId = Math.random().toString(36).slice(2, 9)
+                const repelled = resolveRepelledPosition(newNodeId, position, nodes as RFNode[])
+                
+                // Add the new node
+                setNodes((prev) => [...prev, { 
+                    id: newNodeId, 
+                    type: 'editable', 
+                    position: repelled, 
+                    data: { label: `Step ${prev.length + 1}` } 
+                }])
+
+                // Create the connection from source to new node
+                const newEdge = {
+                    id: Math.random().toString(36).slice(2, 9),
+                    source: connectionStart.nodeId,
+                    target: newNodeId,
+                    sourceHandle: connectionStart.handleId,
+                    targetHandle: null,
+                    markerEnd: { type: MarkerType.ArrowClosed },
+                    type: 'hl'
+                }
+
+                setEdges((eds: RFEdge[]) => [...eds, newEdge as RFEdge])
+            }
+
+            // Clear connection start state
+            setConnectionStart(null)
+        },
+        [connectionStart, reactFlowInstance, nodes, edges, setNodes, setEdges, resolveRepelledPosition],
+    )
 
     // click on an edge: select only that edge; click again: de-select
     const onEdgeClick = React.useCallback((evt: React.MouseEvent, edge: RFEdge) => {
@@ -737,11 +824,21 @@ export default function OperationalFlowEditor({
     const styledEdges = React.useMemo(() => {
         return (edges as RFEdge[]).map((e) => {
             const selected = (e as any).selected
-            const markerEnd = { type: MarkerType.ArrowClosed, color: selected ? '#22c55e' : '#94a3b8' } as any
+            const isAnimating = animatingConnections.has(e.id)
+
+            // Match arrow color with edge color based on state
+            let arrowColor = '#94a3b8' // default gray
+            if (selected) {
+                arrowColor = '#22c55e' // green for selected
+            } else if (isAnimating) {
+                arrowColor = '#3b82f6' // blue for animated/highlighted
+            }
+
+            const markerEnd = { type: MarkerType.ArrowClosed, color: arrowColor } as any
             // no obstacles passed -> no line repulsion
             return { ...e, markerEnd }
         })
-    }, [edges])
+    }, [edges, animatingConnections])
 
     // wrapped change handlers to capture history for removes/adds/position updates
     const onNodesChangeWithHistory = React.useCallback((changes: any[]) => {
@@ -788,7 +885,7 @@ export default function OperationalFlowEditor({
 
     const autoLayout = React.useCallback(() => {
         if (nodes.length === 0) return
-        
+
         // Record state before auto-layout
         const prev = fromRF(nodes as any, edges as any)
         historyRef.current.push(prev)
@@ -799,12 +896,12 @@ export default function OperationalFlowEditor({
         // Create adjacency lists for graph traversal
         const outgoing = new Map<string, string[]>()
         const incoming = new Map<string, string[]>()
-        
+
         nodes.forEach(node => {
             outgoing.set(node.id, [])
             incoming.set(node.id, [])
         })
-        
+
         edges.forEach(edge => {
             const source = (edge as any).source
             const target = (edge as any).target
@@ -815,13 +912,13 @@ export default function OperationalFlowEditor({
         // Find root nodes (nodes with no incoming edges) and leaf nodes
         const rootNodes = nodes.filter(node => (incoming.get(node.id)?.length || 0) === 0)
         const leafNodes = nodes.filter(node => (outgoing.get(node.id)?.length || 0) === 0)
-        
+
         // If no clear hierarchy, create a simple grid layout
         if (rootNodes.length === 0 || rootNodes.length === nodes.length) {
             const nodeSpacing = 250
             const rowHeight = 150
             const nodesPerRow = Math.ceil(Math.sqrt(nodes.length))
-            
+
             setNodes(prevNodes => prevNodes.map((node, index) => ({
                 ...node,
                 position: {
@@ -835,29 +932,29 @@ export default function OperationalFlowEditor({
         // Hierarchical layout - assign levels to nodes using BFS
         const levels = new Map<string, number>()
         const queue: Array<{ id: string; level: number }> = []
-        
+
         // Start with root nodes at level 0
         rootNodes.forEach(node => {
             levels.set(node.id, 0)
             queue.push({ id: node.id, level: 0 })
         })
-        
+
         // BFS to assign levels
         while (queue.length > 0) {
             const { id, level } = queue.shift()!
             const children = outgoing.get(id) || []
-            
+
             children.forEach(childId => {
                 const currentLevel = levels.get(childId)
                 const newLevel = level + 1
-                
+
                 if (currentLevel === undefined || newLevel > currentLevel) {
                     levels.set(childId, newLevel)
                     queue.push({ id: childId, level: newLevel })
                 }
             })
         }
-        
+
         // Group nodes by level
         const nodesByLevel = new Map<number, string[]>()
         levels.forEach((level, nodeId) => {
@@ -866,38 +963,38 @@ export default function OperationalFlowEditor({
             }
             nodesByLevel.get(level)!.push(nodeId)
         })
-        
+
         // Layout parameters
         const levelSpacing = 300 // horizontal distance between levels
         const nodeSpacing = 200 // vertical distance between nodes in same level
         const startX = 100
         const startY = 100
-        
+
         // Position nodes
         const newPositions = new Map<string, { x: number; y: number }>()
-        
+
         nodesByLevel.forEach((levelNodes, level) => {
             const x = startX + level * levelSpacing
             const totalHeight = (levelNodes.length - 1) * nodeSpacing
             const startYForLevel = startY - totalHeight / 2
-            
+
             levelNodes.forEach((nodeId, index) => {
                 const y = startYForLevel + index * nodeSpacing
                 newPositions.set(nodeId, { x, y })
             })
         })
-        
+
         // Apply new positions
         setNodes(prevNodes => prevNodes.map(node => ({
             ...node,
             position: newPositions.get(node.id) || node.position
         })))
-        
+
         // Fit view after layout
         setTimeout(() => {
             rfRef.current?.fitView?.({ padding: 0.2, maxZoom: 1.2 })
         }, 100)
-        
+
     }, [nodes, edges, setNodes])
 
     const undo = React.useCallback(() => {
@@ -1052,7 +1149,7 @@ export default function OperationalFlowEditor({
                     <div className="absolute inset-0 bg-black/70" onClick={() => setOpen(false)} />
                     <div className="absolute inset-0 p-4 flex flex-col">
                         <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 flex items-center gap-2">
-                            <button type="button" className="text-yellow-400 border border-yellow-500/40 px-3 py-1 rounded" onClick={addNode}>Add node</button>
+                            <button type="button" className="text-yellow-400 border border-yellow-500/40 px-3 py-1 rounded" onClick={() => addNode()}>Add node</button>
                             <button type="button" className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded" onClick={deleteSelected}>Delete selected</button>
                             <button
                                 type="button"
@@ -1064,9 +1161,9 @@ export default function OperationalFlowEditor({
                                 disabled={!((nodes as any[]).filter(n => n.selected).length === 1)}
                                 title="Rename selected"
                             >Rename</button>
-                            <button 
-                                type="button" 
-                                className="bg-blue-600 hover:bg-blue-700 text-white border border-blue-600 px-3 py-1 rounded" 
+                            <button
+                                type="button"
+                                className="bg-blue-600 hover:bg-blue-700 text-white border border-blue-600 px-3 py-1 rounded"
                                 onClick={autoLayout}
                                 disabled={nodes.length === 0}
                                 title="Automatically arrange nodes in optimal layout"
@@ -1097,6 +1194,8 @@ export default function OperationalFlowEditor({
                                 onNodesChange={onNodesChangeWithHistory}
                                 onEdgesChange={onEdgesChangeWithHistory}
                                 onConnect={onConnect}
+                                onConnectStart={onConnectStart}
+                                onConnectEnd={onConnectEnd}
                                 onEdgeClick={onEdgeClick}
                                 onNodeClick={onNodeClick}
                                 onNodeDrag={(_, node) => {
@@ -1110,8 +1209,25 @@ export default function OperationalFlowEditor({
                                 edgeTypes={edgeTypes}
                                 connectionLineType={ConnectionLineType.Bezier}
                                 onPaneClick={() => {
+                                    // Deselect all nodes and edges
                                     setNodes(prev => prev.map(n => (n as any).selected ? { ...n, selected: false } : n))
                                     setEdges(prev => prev.map(e => (e as any).selected ? { ...e, selected: false } : e))
+                                    
+                                    // Clear any node highlighting animations
+                                    if (animationTimeoutRef.current) {
+                                        clearTimeout(animationTimeoutRef.current)
+                                        animationTimeoutRef.current = null
+                                    }
+
+                                    // Clear any existing target timeouts
+                                    targetTimeoutsRef.current.forEach(timeout => clearTimeout(timeout))
+                                    targetTimeoutsRef.current.clear()
+
+                                    // Clear all highlighting and animation states
+                                    setHighlightedNodeId(null)
+                                    setAnimatingConnections(new Set())
+                                    setAnimatingTargets(new Set())
+                                    setTargetAnimationDelays(new Map())
                                 }}
                                 onInit={(inst) => { rfRef.current = inst; setTimeout(() => inst.fitView?.({ padding: 0.2, maxZoom: 1 }), 0) }}
                                 fitView
@@ -1130,7 +1246,6 @@ export default function OperationalFlowEditor({
                                 deleteKeyCode={["Delete", "Backspace"]}
                                 defaultEdgeOptions={{ type: 'hl', markerEnd: { type: MarkerType.ArrowClosed }, interactionWidth: 40 }}
                             >
-                                <MiniMap pannable zoomable />
                                 <Controls position="bottom-left" />
                             </ReactFlow>
                             <div className="absolute bottom-2 left-2 text-xs text-gray-400">
@@ -1143,3 +1258,21 @@ export default function OperationalFlowEditor({
         </div>
     )
 }
+
+// Main component that provides ReactFlow context
+function OperationalFlowEditor(props: {
+    value?: WorkflowGraph | null,
+    onChange?: (g: WorkflowGraph) => void,
+    height?: number,
+    onSave?: (workflow: WorkflowGraph) => Promise<void>,
+    saving?: boolean,
+    businessPlanId?: string
+}) {
+    return (
+        <ReactFlowProvider>
+            <OperationalFlowEditorInner {...props} />
+        </ReactFlowProvider>
+    )
+}
+
+export default OperationalFlowEditor
