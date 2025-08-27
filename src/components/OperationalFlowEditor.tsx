@@ -67,7 +67,21 @@ const norm = (g: WorkflowGraph) => JSON.stringify({
     edges: [...(g.edges || [])].map(e => ({ id: e.id, from: e.from, to: e.to })).sort((a, b) => (a.from === b.from ? a.to.localeCompare(b.to) : a.from.localeCompare(b.from)))
 })
 
-export default function OperationalFlowEditor({ value, onChange, height = 480 }: { value?: WorkflowGraph | null, onChange?: (g: WorkflowGraph) => void, height?: number }) {
+export default function OperationalFlowEditor({ 
+    value, 
+    onChange, 
+    height = 480, 
+    onSave, 
+    saving = false,
+    businessPlanId 
+}: { 
+    value?: WorkflowGraph | null, 
+    onChange?: (g: WorkflowGraph) => void, 
+    height?: number,
+    onSave?: (workflow: WorkflowGraph) => Promise<void>,
+    saving?: boolean,
+    businessPlanId?: string
+}) {
     const initial = React.useMemo(() => toRF(value), [value])
 
     const [nodes, setNodes, onNodesChange] = useNodesState(initial.nodes)
@@ -76,6 +90,7 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
     const showPreview = false
     const rfRef = React.useRef<any | null>(null)
     const containerRef = React.useRef<HTMLDivElement | null>(null)
+    // menu/context actions removed for a simpler, reliable rename UX
 
     const lastFromPropsRef = React.useRef<string | null>(null)
     const lastEmittedRef = React.useRef<string | null>(null)
@@ -254,40 +269,135 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
         setFutureLen(0)
         setNodes((prevNodes: RFNode[]) => prevNodes.map(n => n.id === id ? { ...n, data: { ...(n.data as any), label: nextLabel } } : n))
     }, [nodes, edges, setNodes])
+    // delete a node by id (and its edges) with history, used by the context menu
+    const deleteNodeById = React.useCallback((id: string) => {
+        const prev = fromRF(nodes as any, edges as any)
+        historyRef.current.push(prev)
+        futureRef.current = []
+        setHistoryLen(historyRef.current.length)
+        setFutureLen(0)
+        setNodes((prevNodes: RFNode[]) => prevNodes.filter(n => n.id !== id))
+        setEdges((prevEdges: RFEdge[]) => prevEdges.filter(e => (e as any).source !== id && (e as any).target !== id))
+    }, [nodes, edges, setNodes, setEdges])
 
-    // custom node with inline label editor and left/right handles
+    // toggle a node's editing state (UI only; no history entry)
+    const setNodeEditing = React.useCallback((id: string, editing: boolean) => {
+        setNodes((prevNodes: RFNode[]) => prevNodes.map(n => n.id === id ? { ...n, data: { ...(n.data as any), editing } } : n))
+    }, [setNodes])
+
+    // custom node with fresh, minimal inline label editor and left/right handles
     const EditableNode = React.useCallback((props: NodeProps) => {
         const label = (props.data as any)?.label ?? ''
-        const [editing, setEditing] = React.useState(false)
+        const editing: boolean = !!(props.data as any)?.editing
         const [draft, setDraft] = React.useState(label)
-        React.useEffect(() => { setDraft(label) }, [label])
+        const inputRef = React.useRef<HTMLInputElement | null>(null)
+        const prevEditingRef = React.useRef(editing)
+
+        // Sync draft when entering edit mode
+        React.useEffect(() => {
+            if (!prevEditingRef.current && editing) setDraft(label)
+            prevEditingRef.current = editing
+        }, [editing, label])
+
+        // Autofocus and move caret to end
+        React.useEffect(() => {
+            if (!editing) return
+            const t = setTimeout(() => {
+                const el = inputRef.current
+                if (!el) return
+                el.focus()
+                const len = el.value?.length ?? 0
+                try { el.setSelectionRange(len, len) } catch {}
+            }, 0)
+            return () => clearTimeout(t)
+        }, [editing])
 
         const commit = () => {
-            setEditing(false)
+            setNodeEditing(props.id, false)
             if (draft !== label) setNodeLabel(props.id, draft)
         }
+        const cancel = () => {
+            setNodeEditing(props.id, false)
+            setDraft(label)
+        }
+
+
 
         return (
-            <div onDoubleClick={(e) => { e.stopPropagation(); setEditing(true) }}>
-                <Handle type="target" position={Position.Left} style={{ width: 10, height: 10, background: '#94a3b8' }} />
-                <Handle type="source" position={Position.Right} style={{ width: 10, height: 10, background: '#94a3b8' }} />
+            <div
+                onDoubleClick={(e) => { 
+                    e.stopPropagation(); 
+                    setNodeEditing(props.id, true);
+                }}
+                onClick={(e) => {
+                    e.stopPropagation();
+                }}
+                style={{ 
+                    background: 'white', 
+                    border: '2px solid #e2e8f0', 
+                    borderRadius: 8,
+                    minWidth: 200,
+                    minHeight: 60,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '10px 16px'
+                }}
+            >
+                <Handle type="target" position={Position.Left} style={{ width: 10, height: 10, background: '#94a3b8', left: 0, top: '50%', transform: 'translate(-50%, -50%)' }} />
+                <Handle type="source" position={Position.Right} style={{ width: 10, height: 10, background: '#94a3b8', right: 0, top: '50%', transform: 'translate(50%, -50%)' }} />
                 {editing ? (
-                    <input
-                        autoFocus
-                        value={draft}
-                        onChange={(e) => setDraft(e.target.value)}
-                        onBlur={commit}
-                        onKeyDown={(e) => { if (e.key === 'Enter') commit(); else if (e.key === 'Escape') { setEditing(false); setDraft(label) } }}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className="bg-transparent outline-none text-sm text-gray-900"
-                        style={{ width: 160 }}
-                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%' }}>
+                        <input
+                            ref={inputRef}
+                            id={`node-label-${props.id}`}
+                            name={`node-label-${props.id}`}
+                            type="text"
+                            autoFocus
+                            autoComplete="off"
+                            value={draft}
+                            onChange={(e) => setDraft(e.target.value)}
+                            onBlur={commit}
+                            onKeyDown={(e) => { 
+                                e.stopPropagation(); 
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    commit();
+                                } else if (e.key === 'Escape') { 
+                                    e.preventDefault(); 
+                                    cancel();
+                                }
+                            }}
+                            onKeyUp={(e) => e.stopPropagation()}
+                            onKeyPress={(e) => e.stopPropagation()}
+                            onInput={(e) => e.stopPropagation()}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            onFocus={(e) => e.stopPropagation()}
+                            className="bg-transparent outline-none text-sm text-gray-900 caret-green-500"
+                            style={{ flex: 1, border: 'none', background: 'transparent', textAlign: 'center' }}
+                        />
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); commit(); }}
+                            className="text-xs px-2 py-1 bg-green-500 text-white rounded"
+                        >
+                            ✓
+                        </button>
+                        <button 
+                            onClick={(e) => { e.stopPropagation(); cancel(); }}
+                            className="text-xs px-2 py-1 bg-red-500 text-white rounded"
+                        >
+                            ✕
+                        </button>
+                    </div>
                 ) : (
-                    <div className="text-sm text-gray-900 select-none" style={{ padding: '2px 0' }}>{label}</div>
+                    <span className="text-sm text-gray-900 select-none text-center">{label}</span>
                 )}
             </div>
         )
-    }, [setNodeLabel])
+    }, [])
 
     const nodeTypes = React.useMemo(() => ({ editable: EditableNode }), [EditableNode])
 
@@ -402,7 +512,7 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
         }
         // apply repulsion against current nodes for initial placement
         const repelled = resolveRepelledPosition(id, position, nodes as RFNode[])
-        setNodes((prev) => [...prev, { id, position: repelled, data: { label: `Step ${prev.length + 1}` } }])
+        setNodes((prev) => [...prev, { id, type: 'editable', position: repelled, data: { label: `Step ${prev.length + 1}` } }])
     }, [nodes, edges, setNodes, resolveRepelledPosition])
 
     // click on an edge: select only that edge; click again: de-select
@@ -433,46 +543,28 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
     const styledNodes = React.useMemo(() => {
         return (nodes as RFNode[]).map((n) => {
             const selected = (n as any).selected
-            const base: React.CSSProperties = {
-                // rounded rectangle shape (not a full pill)
-                borderRadius: 12,
-                background: '#ffffff',
-                color: '#111827',
-                padding: '10px 16px',
-                fontSize: 14,
-                minWidth: 120,
-                minHeight: 44,
-            }
+            const isEditing = !!((n.data as any)?.editing)
+            // Minimal styling - let the EditableNode component handle all visual styling
             const style = selected
                 ? {
-                    ...base,
                     ...n.style,
-                    // match edge highlight intensity (thicker border + glow)
-                    border: '3px solid #22c55e',
-                    boxShadow: '0 0 0 2px rgba(34,197,94,0.35), 0 0 6px rgba(34,197,94,0.6)',
+                    // Add selection glow effect around the entire node
+                    filter: 'drop-shadow(0 0 0 3px #22c55e) drop-shadow(0 0 6px rgba(34,197,94,0.6))',
                 }
-                : { ...base, ...n.style, border: '1px solid #cbd5e1' }
-            return { ...n, style }
+                : { ...n.style }
+            return { ...n, style, draggable: !isEditing, connectable: !isEditing }
         })
     }, [nodes])
 
     // derive styled edges: arrowhead color follows selection
     const styledEdges = React.useMemo(() => {
-        const rects: { [id: string]: { x: number; y: number; w: number; h: number } } = {}
-        for (const n of nodes as RFNode[]) {
-            const dims = getNodeDims(n)
-            rects[n.id] = { x: n.position.x, y: n.position.y, w: dims.w, h: dims.h }
-        }
         return (edges as RFEdge[]).map((e) => {
             const selected = (e as any).selected
             const markerEnd = { type: MarkerType.ArrowClosed, color: selected ? '#22c55e' : '#94a3b8' } as any
-            // pass obstacle rects for all nodes except the ones connected by this edge
-            const obstacles: Rect[] = (nodes as RFNode[])
-                .filter(n => n.id !== (e as any).source && n.id !== (e as any).target)
-                .map(n => ({ id: n.id, ...(rects[n.id]) }))
-            return { ...e, markerEnd, data: { ...(e as any).data, obstacles } }
+            // no obstacles passed -> no line repulsion
+            return { ...e, markerEnd }
         })
-    }, [edges, nodes, getNodeDims])
+    }, [edges])
 
     // wrapped change handlers to capture history for removes/adds/position updates
     const onNodesChangeWithHistory = React.useCallback((changes: any[]) => {
@@ -578,6 +670,13 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
         onChange?.(out)
     }, [nodes, edges, onChange])
 
+    // Save workflow directly to backend
+    const saveWorkflow = React.useCallback(async () => {
+        if (!onSave || !businessPlanId) return
+        const currentWorkflow = fromRF(nodes as any, edges as any)
+        await onSave(currentWorkflow)
+    }, [onSave, businessPlanId, nodes, edges])
+
     return (
         <div className="rounded-xl border border-gray-800 bg-gray-900 p-3">
             <div className="flex items-center justify-between">
@@ -602,15 +701,35 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
                         <div className="rounded-lg border border-gray-800 bg-gray-900 p-3 flex items-center gap-2">
                             <button type="button" className="text-yellow-400 border border-yellow-500/40 px-3 py-1 rounded" onClick={addNode}>Add node</button>
                             <button type="button" className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded" onClick={deleteSelected}>Delete selected</button>
+                            <button
+                                type="button"
+                                className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded"
+                                onClick={() => {
+                                    const sel = (nodes as any[]).find(n => n.selected)
+                                    if (sel) setNodeEditing(sel.id, true)
+                                }}
+                                disabled={!((nodes as any[]).filter(n => n.selected).length === 1)}
+                                title="Rename selected"
+                            >Rename</button>
                             <button type="button" disabled={historyLen === 0} className={`px-3 py-1 rounded border ${historyLen === 0 ? 'text-gray-500 border-gray-800' : 'text-gray-200 bg-gray-800 hover:bg-gray-700 border-gray-700'}`} onClick={undo}>Undo</button>
                             <button type="button" disabled={futureLen === 0} className={`px-3 py-1 rounded border ${futureLen === 0 ? 'text-gray-500 border-gray-800' : 'text-gray-200 bg-gray-800 hover:bg-gray-700 border-gray-700'}`} onClick={redo}>Redo</button>
                             <button type="button" className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded" onClick={() => rfRef.current?.fitView?.({ padding: 0.2, maxZoom: 1 })}>Fit</button>
+                            {onSave && businessPlanId && (
+                                <button 
+                                    type="button" 
+                                    onClick={saveWorkflow}
+                                    disabled={saving}
+                                    className="bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white border border-green-600 px-3 py-1 rounded"
+                                >
+                                    {saving ? 'Saving...' : 'Save Workflow'}
+                                </button>
+                            )}
                             <div className="ml-auto flex items-center gap-2">
                                 <button type="button" className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded" onClick={() => setOpen(false)}>Close</button>
                             </div>
                         </div>
-                        <div ref={containerRef} className="relative flex-1 mt-3 rounded-lg border border-gray-800 overflow-hidden bg-gray-900">
-                            <ReactFlow
+            <div ref={containerRef} className="relative flex-1 mt-3 rounded-lg border border-gray-800 overflow-hidden bg-gray-900">
+                <ReactFlow
                                 className="bg-gray-900"
                                 nodes={styledNodes}
                                 edges={styledEdges}
@@ -650,10 +769,10 @@ export default function OperationalFlowEditor({ value, onChange, height = 480 }:
                                 elevateEdgesOnSelect
                                 deleteKeyCode={["Delete", "Backspace"]}
                                 defaultEdgeOptions={{ type: 'hl', markerEnd: { type: MarkerType.ArrowClosed }, interactionWidth: 40 }}
-                            >
-                                <MiniMap pannable zoomable />
-                                <Controls position="bottom-left" />
-                            </ReactFlow>
+                                >
+                                    <MiniMap pannable zoomable />
+                                    <Controls position="bottom-left" />
+                                </ReactFlow>
                             <div className="absolute bottom-2 left-2 text-xs text-gray-400">
                                 Tip: Drag to move nodes. Pan with mouse wheel or drag background. Snap to 16px grid. Connect nodes by dragging between handles. Del/Backspace deletes selected. Ctrl+Z/Ctrl+Y undo/redo.
                             </div>

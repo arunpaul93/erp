@@ -19,6 +19,7 @@ export default function BusinessPlanDetailPage() {
   const [plan, setPlan] = useState<any | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [savingWorkflow, setSavingWorkflow] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -139,6 +140,34 @@ export default function BusinessPlanDetailPage() {
     router.push('/business-plan')
   }
 
+  // Save only the workflow to the backend
+  const saveWorkflow = async (workflow: WorkflowGraph) => {
+    if (!id || !selectedOrgId) return
+    setSavingWorkflow(true)
+    setError(null)
+    setSuccess(null)
+
+    const { error } = await supabase
+      .from('business_plan')
+      .update({
+        operational_workflow: workflow,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('organisation_id', selectedOrgId)
+
+    setSavingWorkflow(false)
+
+    if (error) {
+      setError(error.message)
+      return
+    }
+    
+    setSuccess('Workflow saved successfully!')
+    // Clear success message after 3 seconds
+    setTimeout(() => setSuccess(null), 3000)
+  }
+
   if (authLoading || orgLoading) return null
   if (!user) return null
 
@@ -176,6 +205,8 @@ export default function BusinessPlanDetailPage() {
             ) : (
               <form onSubmit={onSave} className="space-y-4">
                 {/* Budget selection removed per request */}
+                {error && <div className="text-sm text-red-400">{error}</div>}
+                {success && <div className="text-sm text-green-400">{success}</div>}
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Name</label>
                   <input
@@ -227,7 +258,14 @@ export default function BusinessPlanDetailPage() {
 
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                  <OperationalFlowEditor value={operationalWorkflow} onChange={setOperationalWorkflow} height={480} />
+                  <OperationalFlowEditor 
+                    value={operationalWorkflow} 
+                    onChange={setOperationalWorkflow} 
+                    height={480}
+                    onSave={saveWorkflow}
+                    saving={savingWorkflow}
+                    businessPlanId={id}
+                  />
                 </div>
 
 

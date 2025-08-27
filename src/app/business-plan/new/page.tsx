@@ -28,6 +28,9 @@ export default function NewBusinessPlanPage() {
     const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
     const [operationalWorkflow, setOperationalWorkflow] = useState<WorkflowGraph | null>(null)
     const [saving, setSaving] = useState(false)
+    const [autoSaving, setAutoSaving] = useState(false)
+    const [savingWorkflow, setSavingWorkflow] = useState(false)
+    const [currentPlanId, setCurrentPlanId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [canvas, setCanvas] = useState<CanvasData | null>(null)
 
@@ -36,6 +39,46 @@ export default function NewBusinessPlanPage() {
     useEffect(() => {
         if (!authLoading && !user) router.push('/login')
     }, [authLoading, user, router])
+
+    // Auto-save when name is provided and we don't have a plan ID yet
+    useEffect(() => {
+        const autoSave = async () => {
+            if (!selectedOrgId || !name.trim() || currentPlanId || autoSaving) return
+            
+            setAutoSaving(true)
+            
+            const { data, error } = await supabase.from('business_plan').insert({
+                organisation_id: selectedOrgId,
+                name: name || null,
+                problem: problem || null,
+                unique_selling_point: uniqueSellingPoint || null,
+                target_market: targetMarket || null,
+                operational_workflow: operationalWorkflow ? operationalWorkflow : null,
+                key_metrics: keyMetrics || null,
+                risks_and_plan_b: risksAndPlanB || null,
+                vision_3_5_years: vision35Years || null,
+                priorities_next_90_days: prioritiesNext90Days || null,
+                canvas: canvas ? canvas : null,
+            }).select().single()
+
+            setAutoSaving(false)
+            
+            if (error) {
+                setError(error.message)
+                return
+            }
+            
+            if (data) {
+                setCurrentPlanId(data.id)
+                // Redirect to the edit page for the newly created plan
+                router.push(`/business-plan/${data.id}`)
+            }
+        }
+
+        // Debounce auto-save by 2 seconds
+        const timeoutId = setTimeout(autoSave, 2000)
+        return () => clearTimeout(timeoutId)
+    }, [selectedOrgId, name, problem, uniqueSellingPoint, targetMarket, operationalWorkflow, keyMetrics, risksAndPlanB, vision35Years, prioritiesNext90Days, canvas, currentPlanId, autoSaving, router])
 
     const onSubmit = async (e: FormEvent) => {
         e.preventDefault()
@@ -70,6 +113,27 @@ export default function NewBusinessPlanPage() {
         router.push('/business-plan')
     }
 
+    // Save only the workflow to the backend (for existing plans)
+    const saveWorkflow = async (workflow: WorkflowGraph) => {
+        if (!currentPlanId || !selectedOrgId) return
+        setSavingWorkflow(true)
+
+        const { error } = await supabase
+            .from('business_plan')
+            .update({
+                operational_workflow: workflow,
+                updated_at: new Date().toISOString(),
+            })
+            .eq('id', currentPlanId)
+            .eq('organisation_id', selectedOrgId)
+
+        setSavingWorkflow(false)
+
+        if (error) {
+            setError(error.message)
+        }
+    }
+
     if (authLoading || orgLoading) return null
     if (!user) return null
 
@@ -92,6 +156,7 @@ export default function NewBusinessPlanPage() {
                 <div className="px-4 sm:px-0">
                     <h2 className="text-2xl font-bold text-yellow-400 mb-4">New Business Plan</h2>
                     <p className="text-sm text-gray-400 mb-6">Organisation: {orgName}</p>
+                    {autoSaving && <div className="text-sm text-blue-400 mb-4">Auto-saving...</div>}
 
                     {!selectedOrgId ? (
                         <div className="text-gray-400 text-sm">Select an organisation first.</div>
@@ -154,7 +219,14 @@ export default function NewBusinessPlanPage() {
 
                             <div>
                                 <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                                <OperationalFlowEditor value={operationalWorkflow} onChange={setOperationalWorkflow} height={480} />
+                                <OperationalFlowEditor 
+                                    value={operationalWorkflow} 
+                                    onChange={setOperationalWorkflow} 
+                                    height={480}
+                                    onSave={currentPlanId ? saveWorkflow : undefined}
+                                    saving={savingWorkflow}
+                                    businessPlanId={currentPlanId || undefined}
+                                />
                             </div>
 
 
@@ -204,13 +276,19 @@ export default function NewBusinessPlanPage() {
                             </div>
 
                             <div className="flex gap-3">
-                                <button
-                                    type="submit"
-                                    disabled={saving}
-                                    className="bg-yellow-400 hover:bg-yellow-500 disabled:opacity-50 text-gray-900 px-4 py-2 rounded-md text-sm font-medium"
-                                >
-                                    {saving ? 'Saving…' : 'Create'}
-                                </button>
+                                {!currentPlanId ? (
+                                    <button
+                                        type="submit"
+                                        disabled={saving || !name.trim()}
+                                        className="bg-yellow-400 hover:bg-yellow-500 disabled:opacity-50 text-gray-900 px-4 py-2 rounded-md text-sm font-medium"
+                                    >
+                                        {saving ? 'Creating…' : 'Create'}
+                                    </button>
+                                ) : (
+                                    <div className="text-sm text-green-400 py-2">
+                                        Business plan created! Redirecting to edit view...
+                                    </div>
+                                )}
                                 <button
                                     type="button"
                                     onClick={() => router.push('/business-plan')}
