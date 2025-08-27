@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import StrategyCanvas from '@/components/StrategyCanvas'
 import type { CanvasData } from '@/components/StrategyCanvas'
+import WorkflowEditor, { type WorkflowGraph } from '@/components/WorkflowEditor'
 
 export default function NewBusinessPlanPage() {
     const router = useRouter()
@@ -25,7 +26,7 @@ export default function NewBusinessPlanPage() {
     const [vision35Years, setVision35Years] = useState('')
 
     const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
-    const [operationalWorkflow, setOperationalWorkflow] = useState<string[]>([''])
+    const [operationalWorkflow, setOperationalWorkflow] = useState<WorkflowGraph | null>(null)
     const [saving, setSaving] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [canvas, setCanvas] = useState<CanvasData | null>(null)
@@ -42,7 +43,7 @@ export default function NewBusinessPlanPage() {
         setSaving(true)
         setError(null)
 
-    const { error } = await supabase.from('business_plan').insert({
+        const { error } = await supabase.from('business_plan').insert({
             organisation_id: selectedOrgId,
             name: name || null,
             problem: problem || null,
@@ -50,7 +51,7 @@ export default function NewBusinessPlanPage() {
             unique_selling_point: uniqueSellingPoint || null,
             target_market: targetMarket || null,
 
-            operational_workflow: operationalWorkflow.length ? operationalWorkflow : null,
+            operational_workflow: operationalWorkflow ? operationalWorkflow : null,
 
             key_metrics: keyMetrics || null,
             risks_and_plan_b: risksAndPlanB || null,
@@ -152,28 +153,8 @@ export default function NewBusinessPlanPage() {
 
 
                             <div>
-                                <label className="block text-sm text-gray-300 mb-1">Operational Workflow (steps)</label>
-                                <div className="space-y-2">
-                                    {operationalWorkflow.map((step, idx) => (
-                                        <div key={idx} className="flex gap-2">
-                                            <input
-                                                value={step}
-                                                onChange={e => {
-                                                    const copy = [...operationalWorkflow]
-                                                    copy[idx] = e.target.value
-                                                    setOperationalWorkflow(copy)
-                                                }}
-                                                className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
-                                                placeholder={`Step ${idx + 1}`}
-                                            />
-                                            <button type="button" onClick={() => setOperationalWorkflow(prev => prev.filter((_, i) => i !== idx))} className="text-red-400">Remove</button>
-                                        </div>
-                                    ))}
-
-                                    <div>
-                                        <button type="button" onClick={() => setOperationalWorkflow(prev => [...prev, ''])} className="text-yellow-400">+ Add step</button>
-                                    </div>
-                                </div>
+                                <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
+                                <WorkflowEditor value={operationalWorkflow} onChange={setOperationalWorkflow} height={480} />
                             </div>
 
 

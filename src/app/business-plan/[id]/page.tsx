@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import StrategyCanvas from '@/components/StrategyCanvas'
 import type { CanvasData } from '@/components/StrategyCanvas'
+import WorkflowEditor, { type WorkflowGraph } from '@/components/WorkflowEditor'
 
 export default function BusinessPlanDetailPage() {
   const router = useRouter()
@@ -35,7 +36,7 @@ export default function BusinessPlanDetailPage() {
   const [vision35Years, setVision35Years] = useState('')
 
   const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
-  const [operationalWorkflow, setOperationalWorkflow] = useState<string[]>([''])
+  const [operationalWorkflow, setOperationalWorkflow] = useState<WorkflowGraph | null>(null)
   // budget items are managed on the budget detail page
   const [canvas, setCanvas] = useState<CanvasData | null>(null)
 
@@ -74,23 +75,22 @@ export default function BusinessPlanDetailPage() {
 
         setKeyMetrics(data?.key_metrics ?? '')
         setRisksAndPlanB(data?.risks_and_plan_b ?? '')
-  setVision35Years(data?.vision_3_5_years ?? '')
-  setCanvas((data as any)?.canvas ?? null)
+        setVision35Years(data?.vision_3_5_years ?? '')
+        setCanvas((data as any)?.canvas ?? null)
 
         setPrioritiesNext90Days(data?.priorities_next_90_days ?? '')
-        // operational_workflow may be stored as JSON array (jsonb) or as a legacy string
-        if (Array.isArray(data?.operational_workflow)) {
-          setOperationalWorkflow(data.operational_workflow as string[])
+        // operational_workflow now stores a visual graph (nodes/edges)
+        if (data?.operational_workflow && typeof data.operational_workflow === 'object') {
+          setOperationalWorkflow(data.operational_workflow as WorkflowGraph)
         } else if (typeof data?.operational_workflow === 'string') {
           try {
             const parsed = JSON.parse(data.operational_workflow)
-            if (Array.isArray(parsed)) setOperationalWorkflow(parsed)
-            else setOperationalWorkflow((data.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+            setOperationalWorkflow(parsed as WorkflowGraph)
           } catch {
-            setOperationalWorkflow((data.operational_workflow as string).split('>').map((s: string) => s.trim()).filter(Boolean))
+            setOperationalWorkflow(null)
           }
         } else {
-          setOperationalWorkflow([''])
+          setOperationalWorkflow(null)
         }
       }
       setLoading(false)
@@ -117,14 +117,14 @@ export default function BusinessPlanDetailPage() {
         unique_selling_point: uniqueSellingPoint || null,
         target_market: targetMarket || null,
 
-        operational_workflow: operationalWorkflow.length ? operationalWorkflow : null,
+        operational_workflow: operationalWorkflow ? operationalWorkflow : null,
 
         key_metrics: keyMetrics || null,
         risks_and_plan_b: risksAndPlanB || null,
         vision_3_5_years: vision35Years || null,
 
-  priorities_next_90_days: prioritiesNext90Days || null,
-  canvas: canvas ? canvas : null,
+        priorities_next_90_days: prioritiesNext90Days || null,
+        canvas: canvas ? canvas : null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
@@ -197,7 +197,7 @@ export default function BusinessPlanDetailPage() {
 
 
 
-        <div>
+                <div>
                   <label className="block text-sm text-gray-300 mb-1">Unique Selling Point</label>
                   <textarea
                     value={uniqueSellingPoint}
@@ -207,10 +207,10 @@ export default function BusinessPlanDetailPage() {
                 </div>
 
                 {/* Strategy Canvas */}
-        <div>
+                <div>
                   <label className="block text-sm text-gray-300 mb-2">Strategy Canvas</label>
                   <div className="-mx-4">
-          <StrategyCanvas value={canvas} onChange={setCanvas} fullScreen selfName={orgName} />
+                    <StrategyCanvas value={canvas} onChange={setCanvas} fullScreen selfName={orgName} />
                   </div>
                 </div>
 
@@ -226,28 +226,8 @@ export default function BusinessPlanDetailPage() {
 
 
                 <div>
-                  <label className="block text-sm text-gray-300 mb-1">Operational Workflow (steps)</label>
-                  <div className="space-y-2">
-                    {operationalWorkflow.map((step, idx) => (
-                      <div key={idx} className="flex gap-2">
-                        <input
-                          value={step}
-                          onChange={(e) => {
-                            const copy = [...operationalWorkflow]
-                            copy[idx] = e.target.value
-                            setOperationalWorkflow(copy)
-                          }}
-                          className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
-                          placeholder={`Step ${idx + 1}`}
-                        />
-                        <button type="button" onClick={() => setOperationalWorkflow(prev => prev.filter((_, i) => i !== idx))} className="text-red-400">Remove</button>
-                      </div>
-                    ))}
-
-                    <div>
-                      <button type="button" onClick={() => setOperationalWorkflow(prev => [...prev, ''])} className="text-yellow-400">+ Add step</button>
-                    </div>
-                  </div>
+                  <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
+                  <WorkflowEditor value={operationalWorkflow} onChange={setOperationalWorkflow} height={480} />
                 </div>
 
 
