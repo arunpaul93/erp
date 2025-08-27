@@ -44,9 +44,9 @@ export default function NewBusinessPlanPage() {
     useEffect(() => {
         const autoSave = async () => {
             if (!selectedOrgId || !name.trim() || currentPlanId || autoSaving) return
-            
+
             setAutoSaving(true)
-            
+
             const { data, error } = await supabase.from('business_plan').insert({
                 organisation_id: selectedOrgId,
                 name: name || null,
@@ -62,12 +62,12 @@ export default function NewBusinessPlanPage() {
             }).select().single()
 
             setAutoSaving(false)
-            
+
             if (error) {
                 setError(error.message)
                 return
             }
-            
+
             if (data) {
                 setCurrentPlanId(data.id)
                 // Redirect to the edit page for the newly created plan
@@ -219,9 +219,9 @@ export default function NewBusinessPlanPage() {
 
                             <div>
                                 <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                                <OperationalFlowEditor 
-                                    value={operationalWorkflow} 
-                                    onChange={setOperationalWorkflow} 
+                                <OperationalFlowEditor
+                                    value={operationalWorkflow}
+                                    onChange={setOperationalWorkflow}
                                     height={480}
                                     onSave={currentPlanId ? saveWorkflow : undefined}
                                     saving={savingWorkflow}

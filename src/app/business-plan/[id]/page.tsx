@@ -162,7 +162,7 @@ export default function BusinessPlanDetailPage() {
       setError(error.message)
       return
     }
-    
+
     setSuccess('Workflow saved successfully!')
     // Clear success message after 3 seconds
     setTimeout(() => setSuccess(null), 3000)
@@ -258,9 +258,9 @@ export default function BusinessPlanDetailPage() {
 
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                  <OperationalFlowEditor 
-                    value={operationalWorkflow} 
-                    onChange={setOperationalWorkflow} 
+                  <OperationalFlowEditor
+                    value={operationalWorkflow}
+                    onChange={setOperationalWorkflow}
                     height={480}
                     onSave={saveWorkflow}
                     saving={savingWorkflow}

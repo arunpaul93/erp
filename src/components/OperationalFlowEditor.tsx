@@ -75,16 +75,16 @@ const norm = (g: WorkflowGraph) => JSON.stringify({
     edges: [...(g.edges || [])].map(e => ({ id: e.id, from: e.from, to: e.to })).sort((a, b) => (a.from === b.from ? a.to.localeCompare(b.to) : a.from.localeCompare(b.from)))
 })
 
-export default function OperationalFlowEditor({ 
-    value, 
-    onChange, 
-    height = 480, 
-    onSave, 
+export default function OperationalFlowEditor({
+    value,
+    onChange,
+    height = 480,
+    onSave,
     saving = false,
-    businessPlanId 
-}: { 
-    value?: WorkflowGraph | null, 
-    onChange?: (g: WorkflowGraph) => void, 
+    businessPlanId
+}: {
+    value?: WorkflowGraph | null,
+    onChange?: (g: WorkflowGraph) => void,
     height?: number,
     onSave?: (workflow: WorkflowGraph) => Promise<void>,
     saving?: boolean,
@@ -109,7 +109,7 @@ export default function OperationalFlowEditor({
         const width = selected ? 4 : 2
 
         const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition } = props
-        
+
         // Determine if this is a backward connection (source is to the right of target)
         const isBackward = sourceX > targetX
 
@@ -122,56 +122,56 @@ export default function OperationalFlowEditor({
             const minSegmentLength = 40 // Minimum 40px between bends
             const nodeWidth = 200 // Estimated node width
             const curveRadius = 20 // Radius for smooth curves instead of 90-degree bends
-            
+
             // Calculate safe exit and entry points
             const sourceExitX = sourceX + Math.max(minSegmentLength, EDGE_PADDING_X)
             const sourceExitY = sourceY
-            
+
             // Ensure target entry point is well outside the target node bounds
             const targetLeftEdge = targetX - (nodeWidth / 2) // Approximate left edge of target node
             const safeApproachDistance = Math.max(minSegmentLength, EDGE_PADDING_X + 20) // Extra clearance
             const targetEntryX = Math.min(targetLeftEdge - safeApproachDistance, sourceExitX - minSegmentLength)
             const targetEntryY = targetY
-            
+
             // Create smooth path with curves instead of sharp 90-degree bends
             let pathCommands: string[] = []
-            
+
             // Start at source handle
             pathCommands.push(`M ${sourceX} ${sourceY}`)
-            
+
             if (sourceY === targetY) {
                 // Same Y level: create path that goes below the nodes with rounded corners
                 const curveHeight = 60 // How far the path extends vertically
                 const cornerRadius = 8 // Radius for rounded corners
                 const midX = (sourceExitX + targetEntryX) / 2
-                
+
                 // Create a path with rounded corners
                 pathCommands.push(`L ${sourceExitX - cornerRadius} ${sourceY}`)
-                
+
                 // Rounded corner down-right
                 pathCommands.push(`Q ${sourceExitX} ${sourceY} ${sourceExitX} ${sourceY + cornerRadius}`)
-                
+
                 // Straight line down
                 pathCommands.push(`L ${sourceExitX} ${sourceY + curveHeight - cornerRadius}`)
-                
+
                 // Rounded corner down-left 
                 pathCommands.push(`Q ${sourceExitX} ${sourceY + curveHeight} ${sourceExitX - cornerRadius} ${sourceY + curveHeight}`)
-                
+
                 // Horizontal bridge at the bottom
                 pathCommands.push(`L ${targetEntryX + cornerRadius} ${sourceY + curveHeight}`)
-                
+
                 // Rounded corner up-left
                 pathCommands.push(`Q ${targetEntryX} ${sourceY + curveHeight} ${targetEntryX} ${sourceY + curveHeight - cornerRadius}`)
-                
+
                 // Straight line back up
                 pathCommands.push(`L ${targetEntryX} ${sourceY + cornerRadius}`)
-                
+
                 // Rounded corner up-right
                 pathCommands.push(`Q ${targetEntryX} ${sourceY} ${targetEntryX + cornerRadius} ${sourceY}`)
-                
+
                 // Final approach to target
                 pathCommands.push(`L ${targetX} ${targetY}`)
-                
+
                 labelX = midX
                 labelY = sourceY + curveHeight / 2
             } else {
@@ -180,10 +180,10 @@ export default function OperationalFlowEditor({
                 const middleY = sourceY + (sourceY < targetY ? verticalOffset : -verticalOffset)
                 const cornerRadius = 8 // Radius for rounded corners
                 const middleX = (sourceExitX + targetEntryX) / 2
-                
+
                 // Source side: horizontal exit
                 pathCommands.push(`L ${sourceExitX - cornerRadius} ${sourceExitY}`)
-                
+
                 // Rounded corner for vertical transition
                 if (sourceY < targetY) {
                     // Going down
@@ -196,12 +196,12 @@ export default function OperationalFlowEditor({
                     pathCommands.push(`L ${sourceExitX} ${middleY + cornerRadius}`)
                     pathCommands.push(`Q ${sourceExitX} ${middleY} ${sourceExitX - cornerRadius} ${middleY}`)
                 }
-                
+
                 // Middle horizontal bridge with minimum segment length
                 if (Math.abs(sourceExitX - targetEntryX) >= minSegmentLength) {
                     pathCommands.push(`L ${targetEntryX + cornerRadius} ${middleY}`)
                 }
-                
+
                 // Rounded corner for target side vertical transition
                 if (sourceY < targetY) {
                     // Coming from below
@@ -214,14 +214,14 @@ export default function OperationalFlowEditor({
                     pathCommands.push(`L ${targetEntryX} ${targetY - cornerRadius}`)
                     pathCommands.push(`Q ${targetEntryX} ${targetY} ${targetEntryX + cornerRadius} ${targetY}`)
                 }
-                
+
                 // Final approach to target handle
                 pathCommands.push(`L ${targetX} ${targetY}`)
-                
+
                 labelX = middleX
                 labelY = middleY
             }
-            
+
             path = pathCommands.join(' ')
         } else {
             // Forward connection: use Bezier curve
@@ -233,7 +233,7 @@ export default function OperationalFlowEditor({
                 targetY,
                 targetPosition,
             })
-            
+
             path = bezierPath
             labelX = labelPosX
             labelY = labelPosY
@@ -305,7 +305,7 @@ export default function OperationalFlowEditor({
                 if (!el) return
                 el.focus()
                 const len = el.value?.length ?? 0
-                try { el.setSelectionRange(len, len) } catch {}
+                try { el.setSelectionRange(len, len) } catch { }
             }, 0)
             return () => clearTimeout(t)
         }, [editing])
@@ -323,16 +323,16 @@ export default function OperationalFlowEditor({
 
         return (
             <div
-                onDoubleClick={(e) => { 
-                    e.stopPropagation(); 
+                onDoubleClick={(e) => {
+                    e.stopPropagation();
                     setNodeEditing(props.id, true);
                 }}
                 onClick={(e) => {
                     e.stopPropagation();
                 }}
-                style={{ 
-                    background: 'white', 
-                    border: '2px solid #e2e8f0', 
+                style={{
+                    background: 'white',
+                    border: '2px solid #e2e8f0',
                     borderRadius: 8,
                     minWidth: 200,
                     minHeight: 60,
@@ -357,13 +357,13 @@ export default function OperationalFlowEditor({
                             value={draft}
                             onChange={(e) => setDraft(e.target.value)}
                             onBlur={commit}
-                            onKeyDown={(e) => { 
-                                e.stopPropagation(); 
+                            onKeyDown={(e) => {
+                                e.stopPropagation();
                                 if (e.key === 'Enter') {
                                     e.preventDefault();
                                     commit();
-                                } else if (e.key === 'Escape') { 
-                                    e.preventDefault(); 
+                                } else if (e.key === 'Escape') {
+                                    e.preventDefault();
                                     cancel();
                                 }
                             }}
@@ -377,13 +377,13 @@ export default function OperationalFlowEditor({
                             className="bg-transparent outline-none text-sm text-gray-900 caret-green-500"
                             style={{ flex: 1, border: 'none', background: 'transparent', textAlign: 'center' }}
                         />
-                        <button 
+                        <button
                             onClick={(e) => { e.stopPropagation(); commit(); }}
                             className="text-xs px-2 py-1 bg-green-500 text-white rounded"
                         >
                             ✓
                         </button>
-                        <button 
+                        <button
                             onClick={(e) => { e.stopPropagation(); cancel(); }}
                             className="text-xs px-2 py-1 bg-red-500 text-white rounded"
                         >
@@ -713,8 +713,8 @@ export default function OperationalFlowEditor({
                             <button type="button" disabled={futureLen === 0} className={`px-3 py-1 rounded border ${futureLen === 0 ? 'text-gray-500 border-gray-800' : 'text-gray-200 bg-gray-800 hover:bg-gray-700 border-gray-700'}`} onClick={redo}>Redo</button>
                             <button type="button" className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded" onClick={() => rfRef.current?.fitView?.({ padding: 0.2, maxZoom: 1 })}>Fit</button>
                             {onSave && businessPlanId && (
-                                <button 
-                                    type="button" 
+                                <button
+                                    type="button"
                                     onClick={saveWorkflow}
                                     disabled={saving}
                                     className="bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white border border-green-600 px-3 py-1 rounded"
@@ -726,8 +726,8 @@ export default function OperationalFlowEditor({
                                 <button type="button" className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-1 rounded" onClick={() => setOpen(false)}>Close</button>
                             </div>
                         </div>
-            <div ref={containerRef} className="relative flex-1 mt-3 rounded-lg border border-gray-800 overflow-hidden bg-gray-900">
-                <ReactFlow
+                        <div ref={containerRef} className="relative flex-1 mt-3 rounded-lg border border-gray-800 overflow-hidden bg-gray-900">
+                            <ReactFlow
                                 className="bg-gray-900"
                                 nodes={styledNodes}
                                 edges={styledEdges}
@@ -767,10 +767,10 @@ export default function OperationalFlowEditor({
                                 elevateEdgesOnSelect
                                 deleteKeyCode={["Delete", "Backspace"]}
                                 defaultEdgeOptions={{ type: 'hl', markerEnd: { type: MarkerType.ArrowClosed }, interactionWidth: 40 }}
-                                >
-                                    <MiniMap pannable zoomable />
-                                    <Controls position="bottom-left" />
-                                </ReactFlow>
+                            >
+                                <MiniMap pannable zoomable />
+                                <Controls position="bottom-left" />
+                            </ReactFlow>
                             <div className="absolute bottom-2 left-2 text-xs text-gray-400">
                                 Tip: Drag to move nodes. Pan with mouse wheel or drag background. Snap to 16px grid. Connect nodes by dragging between handles. Del/Backspace deletes selected. Ctrl+Z/Ctrl+Y undo/redo.
                             </div>
