@@ -121,6 +121,7 @@ function OperationalFlowEditorInner({
 
     const lastFromPropsRef = React.useRef<string | null>(null)
     const lastEmittedRef = React.useRef<string | null>(null)
+    const lastAutoSavedRef = React.useRef<string | null>(null)
 
     const HLEdge = React.useCallback((props: EdgeProps) => {
         const selected = (props as any).selected || (props as any).data?.selected
@@ -1058,7 +1059,34 @@ function OperationalFlowEditorInner({
         onChange?.(out)
     }, [nodes, edges, onChange])
 
-    // Save workflow directly to backend
+    // Auto-save workflow after 3 seconds of inactivity
+    React.useEffect(() => {
+        if (!onSave || !businessPlanId) return
+        
+        const timeoutId = setTimeout(async () => {
+            try {
+                const currentWorkflow = fromRF(nodes as any, edges as any)
+                const currentWorkflowStr = norm(currentWorkflow)
+                
+                // Only auto-save if:
+                // 1. There are actual nodes or edges
+                // 2. The workflow has changed since last auto-save
+                if ((currentWorkflow.nodes.length > 0 || currentWorkflow.edges.length > 0) && 
+                    lastAutoSavedRef.current !== currentWorkflowStr) {
+                    
+                    await onSave(currentWorkflow)
+                    lastAutoSavedRef.current = currentWorkflowStr
+                    console.log('Auto-saved workflow')
+                }
+            } catch (error) {
+                console.error('Auto-save failed:', error)
+            }
+        }, 3000) // 3 seconds delay
+
+        return () => clearTimeout(timeoutId)
+    }, [nodes, edges, businessPlanId]) // Removed onSave from dependencies
+
+    // Save workflow directly to backend (manual save)
     const saveWorkflow = React.useCallback(async () => {
         if (!onSave || !businessPlanId) return
         const currentWorkflow = fromRF(nodes as any, edges as any)

@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -33,6 +33,9 @@ export default function NewBusinessPlanPage() {
     const [currentPlanId, setCurrentPlanId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [canvas, setCanvas] = useState<CanvasData | null>(null)
+    
+    // Ref to ensure we only save once
+    const hasAutoSavedRef = useRef(false)
 
     const orgName = useMemo(() => orgs.find(o => o.id === selectedOrgId)?.name ?? '—', [orgs, selectedOrgId])
 
@@ -40,16 +43,18 @@ export default function NewBusinessPlanPage() {
         if (!authLoading && !user) router.push('/login')
     }, [authLoading, user, router])
 
-    // Auto-save when name is provided and we don't have a plan ID yet
+    // Immediately save a new plan when page loads (no delay)
     useEffect(() => {
-        const autoSave = async () => {
-            if (!selectedOrgId || !name.trim() || currentPlanId || autoSaving) return
+        const immediateAutoSave = async () => {
+            // Only run once when org is selected and we haven't saved yet
+            if (!selectedOrgId || currentPlanId || autoSaving || orgLoading || hasAutoSavedRef.current) return
 
+            hasAutoSavedRef.current = true // Mark as saved to prevent duplicate calls
             setAutoSaving(true)
 
             const { data, error } = await supabase.from('business_plan').insert({
                 organisation_id: selectedOrgId,
-                name: name || null,
+                name: name.trim() || 'Untitled Business Plan',
                 problem: problem || null,
                 unique_selling_point: uniqueSellingPoint || null,
                 target_market: targetMarket || null,
@@ -65,6 +70,7 @@ export default function NewBusinessPlanPage() {
 
             if (error) {
                 setError(error.message)
+                hasAutoSavedRef.current = false // Reset on error so user can try again
                 return
             }
 
@@ -75,10 +81,8 @@ export default function NewBusinessPlanPage() {
             }
         }
 
-        // Debounce auto-save by 2 seconds
-        const timeoutId = setTimeout(autoSave, 2000)
-        return () => clearTimeout(timeoutId)
-    }, [selectedOrgId, name, problem, uniqueSellingPoint, targetMarket, operationalWorkflow, keyMetrics, risksAndPlanB, vision35Years, prioritiesNext90Days, canvas, currentPlanId, autoSaving, router])
+        immediateAutoSave()
+    }, [selectedOrgId, orgLoading, currentPlanId, autoSaving]) // Include all dependencies
 
     const onSubmit = async (e: FormEvent) => {
         e.preventDefault()
