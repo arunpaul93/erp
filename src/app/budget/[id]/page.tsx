@@ -1,10 +1,33 @@
 "use client"
 
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
 import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement,
+} from 'chart.js'
+import { Chart } from 'react-chartjs-2'
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  BarElement
+)
 
 export default function BudgetDetailPage() {
   const router = useRouter()
@@ -38,6 +61,9 @@ export default function BudgetDetailPage() {
   const [budgetSaveSuccess, setBudgetSaveSuccess] = useState(false)
   const [calculatingCashFlow, setCalculatingCashFlow] = useState(false)
   const [cashFlowSuccess, setCashFlowSuccess] = useState(false)
+  const [cashFlowData, setCashFlowData] = useState<any[]>([])
+  const [showCashFlowChart, setShowCashFlowChart] = useState(false)
+  const [showCashFlowModal, setShowCashFlowModal] = useState(false)
   // Edit item state
   const [editOpenId, setEditOpenId] = useState<string | null>(null)
   const [editType, setEditType] = useState<string>('')
@@ -174,9 +200,8 @@ export default function BudgetDetailPage() {
         p_budget_id: id 
       })
       
-      setCalculatingCashFlow(false)
-      
       if (error) {
+        setCalculatingCashFlow(false)
         setError(error.message)
         return
       }
@@ -189,7 +214,24 @@ export default function BudgetDetailPage() {
         console.log(`Config processed: ${data.calculation_summary?.budget_config_processed || false}`)
       }
       
+      // Fetch the cash flow forecast data
+      const { data: forecastData, error: forecastError } = await supabase
+        .from('cashflow_forecast')
+        .select('*')
+        .eq('budget_id', id)
+        .order('forecast_date', { ascending: true })
+      
+      if (forecastError) {
+        setCalculatingCashFlow(false)
+        setError(forecastError.message)
+        return
+      }
+      
+      setCashFlowData(forecastData || [])
+      setCalculatingCashFlow(false)
       setCashFlowSuccess(true)
+      setShowCashFlowChart(true)
+      setShowCashFlowModal(true)
       
       // Show success state for 3 seconds
       setTimeout(() => {
@@ -411,6 +453,55 @@ export default function BudgetDetailPage() {
                     </div>
                   </div>
 
+                {/* Cash Flow Chart Preview */}
+                {showCashFlowChart && cashFlowData.length > 0 && (
+                  <div className="mb-6 p-4 bg-gray-900/60 border border-gray-800 rounded">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-sm text-gray-300 font-medium">Cash Flow Forecast</h4>
+                      <div className="flex items-center gap-2">
+                        <button 
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs"
+                          onClick={() => setShowCashFlowModal(true)}
+                        >
+                          View Fullscreen
+                        </button>
+                        <button 
+                          className="text-gray-400 hover:text-gray-300 text-xs"
+                          onClick={() => setShowCashFlowChart(false)}
+                        >
+                          ✕ Close
+                        </button>
+                      </div>
+                    </div>
+                    <div className="h-40">
+                      <CashFlowChart data={cashFlowData} compact={true} />
+                    </div>
+                    <div className="mt-2 text-xs text-gray-400 text-center">
+                      Click "View Fullscreen" for detailed view
+                    </div>
+                  </div>
+                )}
+
+                {/* Fullscreen Cash Flow Modal */}
+                {showCashFlowModal && (
+                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div className="bg-gray-900 rounded-lg shadow-xl w-[95vw] h-[95vh] max-w-7xl flex flex-col">
+                      <div className="flex items-center justify-between p-4 border-b border-gray-700">
+                        <h3 className="text-lg font-medium text-gray-100">Cash Flow Forecast - Detailed View</h3>
+                        <button 
+                          className="text-gray-400 hover:text-gray-300 text-xl"
+                          onClick={() => setShowCashFlowModal(false)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div className="flex-1 p-4 overflow-hidden">
+                        <CashFlowChart data={cashFlowData} compact={false} />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {addOpen && (
                   <div className="mb-4 p-3 bg-gray-900/60 border border-gray-800 rounded space-y-3">
                     <div className="flex gap-2">
@@ -424,7 +515,7 @@ export default function BudgetDetailPage() {
                           setAddAttrs({});
                         }
                         if (!addName) setAddName(v) 
-                      }} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                      }} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
                         <option value="">Select type</option>
                         <option value="owners_capital_added">owners_capital_added</option>
                         <option value="owners_capital_withdrawal">owners_capital_withdrawal</option>
@@ -434,38 +525,38 @@ export default function BudgetDetailPage() {
                         <option value="project_income_on_dates">project_income_on_dates</option>
                         <option value="project_income_recurring">project_income_recurring</option>
                       </select>
-                      <input value={addName} onChange={(e) => setAddName(e.target.value)} placeholder="Item name" className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                      <input value={addName} onChange={(e) => setAddName(e.target.value)} placeholder="Item name" className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                     </div>
 
                     {addType === 'owners_capital_added' || addType === 'owners_capital_withdrawal' ? (
                       <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Amount</label>
-                          <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Date</label>
-                          <input type="date" value={addAttrs.date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input type="date" value={addAttrs.date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                       </div>
                     ) : addType === 'fixed_expense_recurring' || addType === 'project_income_recurring' ? (
                       <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Amount</label>
-                          <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Tax code</label>
-                          <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                            <option value="">Tax code</option>
+                          <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                            <option value="">Select tax code</option>
                             <option value="gst">gst</option>
                             <option value="gstfree">gstfree</option>
                           </select>
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Frequency</label>
-                          <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                            <option value="">Frequency</option>
+                          <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                            <option value="">Select frequency</option>
                             <option value="monthly">monthly</option>
                             <option value="weekly">weekly</option>
                             <option value="yearly">yearly</option>
@@ -473,15 +564,15 @@ export default function BudgetDetailPage() {
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Interval</label>
-                          <input type="number" value={addAttrs.interval ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, interval: Number(e.target.value) }))} placeholder="Interval" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input type="number" value={addAttrs.interval ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, interval: Number(e.target.value) }))} placeholder="Interval" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Start date</label>
-                          <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">End date</label>
-                          <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                       </div>
                     ) : addType === 'expense_on_dates' || addType === 'project_income_on_dates' ? (
@@ -532,6 +623,7 @@ export default function BudgetDetailPage() {
                                       setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
                                     }}
                                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" 
+                                    required
                                   />
                                 </div>
                                 <div className="flex-1">
@@ -546,6 +638,7 @@ export default function BudgetDetailPage() {
                                     }}
                                     placeholder="Amount" 
                                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" 
+                                    required
                                   />
                                 </div>
                                 <button 
@@ -565,8 +658,8 @@ export default function BudgetDetailPage() {
                         
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Tax code</label>
-                          <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                            <option value="">Tax code</option>
+                          <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                            <option value="">Select tax code</option>
                             <option value="gst">gst</option>
                             <option value="gstfree">gstfree</option>
                           </select>
@@ -576,8 +669,8 @@ export default function BudgetDetailPage() {
                       <div className="grid grid-cols-2 gap-3">
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Frequency</label>
-                          <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                            <option value="">Frequency</option>
+                          <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                            <option value="">Select frequency</option>
                             <option value="monthly">monthly</option>
                             <option value="weekly">weekly</option>
                             <option value="yearly">yearly</option>
@@ -585,24 +678,24 @@ export default function BudgetDetailPage() {
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Start date</label>
-                          <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">End date</label>
-                          <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Hourly rate</label>
-                          <input value={addAttrs.hourly_rate ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hourly_rate: e.target.value }))} placeholder="Hourly rate" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input value={addAttrs.hourly_rate ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hourly_rate: e.target.value }))} placeholder="Hourly rate" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Hours per pay period</label>
-                          <input value={addAttrs.hours_per_pay_period ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hours_per_pay_period: e.target.value }))} placeholder="Hours per pay period" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                          <input value={addAttrs.hours_per_pay_period ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hours_per_pay_period: e.target.value }))} placeholder="Hours per pay period" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                         </div>
                         <div className="flex flex-col">
                           <label className="text-xs text-gray-300 mb-1">Leave entitlement</label>
-                          <select value={addAttrs.leave_entitlement ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, leave_entitlement: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                            <option value="">Leave entitlement</option>
+                          <select value={addAttrs.leave_entitlement ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, leave_entitlement: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                            <option value="">Select leave entitlement</option>
                             <option value="yes">yes</option>
                             <option value="no">no</option>
                           </select>
@@ -616,8 +709,37 @@ export default function BudgetDetailPage() {
                         const name = (addName || addType || '').trim()
                         if (!type) return setError('Select an item type')
                         if (!name) return setError('Enter item name')
-                        let attributes: any = {}
+                        
+                        // Validate required fields based on type
                         const a = addAttrs || {}
+                        if (type === 'owners_capital_added' || type === 'owners_capital_withdrawal') {
+                          if (!a.amount) return setError('Amount is required')
+                          if (!a.date) return setError('Date is required')
+                        } else if (type === 'fixed_expense_recurring' || type === 'project_income_recurring') {
+                          if (!a.amount) return setError('Amount is required')
+                          if (!a.taxcode) return setError('Tax code is required')
+                          if (!a.frequency) return setError('Frequency is required')
+                          if (!a.interval) return setError('Interval is required')
+                          if (!a.start_date) return setError('Start date is required')
+                          if (!a.end_date) return setError('End date is required')
+                        } else if (type === 'expense_on_dates' || type === 'project_income_on_dates') {
+                          const entries = a.dateAmountEntries || []
+                          if (entries.length === 0) return setError('At least one date and amount entry is required')
+                          for (let i = 0; i < entries.length; i++) {
+                            if (!entries[i].date) return setError(`Date is required for entry ${i + 1}`)
+                            if (!entries[i].amount) return setError(`Amount is required for entry ${i + 1}`)
+                          }
+                          if (!a.taxcode) return setError('Tax code is required')
+                        } else if (type === 'staff_payroll') {
+                          if (!a.frequency) return setError('Frequency is required')
+                          if (!a.start_date) return setError('Start date is required')
+                          if (!a.end_date) return setError('End date is required')
+                          if (!a.hourly_rate) return setError('Hourly rate is required')
+                          if (!a.hours_per_pay_period) return setError('Hours per pay period is required')
+                          if (!a.leave_entitlement) return setError('Leave entitlement is required')
+                        }
+
+                        let attributes: any = {}
                         try {
                           switch (type) {
                             case 'owners_capital_added':
@@ -1052,7 +1174,7 @@ export default function BudgetDetailPage() {
                       const { data, error } = await supabase.from('budget_config' as any).insert({ 
                         budget_id: id,
                         gst_frequency: null,
-                        leave_entitlement_rate: null,
+                        leave_entitlements_rate: null,
                         superannuation_frequency: null,
                         payroll_tax_rate: null,
                         payroll_expense_account_code: null,
@@ -1087,6 +1209,7 @@ export default function BudgetDetailPage() {
                       className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
                       value={cfgDraft?.gst_frequency ?? ''}
                       onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, gst_frequency: e.target.value }))}
+                      required
                     >
                       <option value="">Select GST frequency</option>
                       <option value="quarterly">quarterly</option>
@@ -1103,9 +1226,10 @@ export default function BudgetDetailPage() {
                       type="number"
                       step="0.01"
                       className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
-                      value={cfgDraft?.leave_entitlement_rate ?? ''}
-                      onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, leave_entitlement_rate: e.target.value === '' ? null : Number(e.target.value) }))}
+                      value={cfgDraft?.leave_entitlements_rate ?? ''}
+                      onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, leave_entitlements_rate: e.target.value === '' ? null : Number(e.target.value) }))}
                       placeholder="e.g. 8.5"
+                      required
                     />
                   </div>
                 </div>
@@ -1118,6 +1242,7 @@ export default function BudgetDetailPage() {
                       className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
                       value={cfgDraft?.superannuation_frequency ?? ''}
                       onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, superannuation_frequency: e.target.value }))}
+                      required
                     >
                       <option value="">Select superannuation frequency</option>
                       <option value="quarterly">quarterly</option>
@@ -1137,6 +1262,7 @@ export default function BudgetDetailPage() {
                       value={cfgDraft?.payroll_tax_rate ?? ''}
                       onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, payroll_tax_rate: e.target.value === '' ? null : Number(e.target.value) }))}
                       placeholder="e.g. 4.85"
+                      required
                     />
                   </div>
                 </div>
@@ -1155,6 +1281,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.payroll_expense_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, payroll_expense_account_code: e.target.value }))}
                         placeholder="e.g. 6200"
+                        required
                       />
                     </div>
                   </div>
@@ -1169,6 +1296,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.leave_entitlement_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, leave_entitlement_account_code: e.target.value }))}
                         placeholder="e.g. 2150"
+                        required
                       />
                     </div>
                   </div>
@@ -1183,6 +1311,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.superannuation_expense_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, superannuation_expense_account_code: e.target.value }))}
                         placeholder="e.g. 6210"
+                        required
                       />
                     </div>
                   </div>
@@ -1197,6 +1326,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.gst_payment_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, gst_payment_account_code: e.target.value }))}
                         placeholder="e.g. 2210"
+                        required
                       />
                     </div>
                   </div>
@@ -1211,6 +1341,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.income_tax_payment_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, income_tax_payment_account_code: e.target.value }))}
                         placeholder="e.g. 2220"
+                        required
                       />
                     </div>
                   </div>
@@ -1225,6 +1356,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.workers_compensation_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, workers_compensation_account_code: e.target.value }))}
                         placeholder="e.g. 6220"
+                        required
                       />
                     </div>
                   </div>
@@ -1239,6 +1371,7 @@ export default function BudgetDetailPage() {
                         value={cfgDraft?.payroll_tax_payment_account_code ?? ''}
                         onChange={(e) => setCfgDraft((prev: any) => ({ ...prev, payroll_tax_payment_account_code: e.target.value }))}
                         placeholder="e.g. 2230"
+                        required
                       />
                     </div>
                   </div>
@@ -1256,6 +1389,20 @@ export default function BudgetDetailPage() {
                     }`}
                     onClick={async () => {
                       if (!id || !cfgDraft || cfgSaving) return
+                      
+                      // Validate all required fields
+                      if (!cfgDraft.gst_frequency) return setCfgError('GST frequency is required')
+                      if (cfgDraft.leave_entitlements_rate === null || cfgDraft.leave_entitlements_rate === undefined || cfgDraft.leave_entitlements_rate === '') return setCfgError('Leave entitlements rate is required')
+                      if (!cfgDraft.superannuation_frequency) return setCfgError('Superannuation frequency is required')
+                      if (cfgDraft.payroll_tax_rate === null || cfgDraft.payroll_tax_rate === undefined || cfgDraft.payroll_tax_rate === '') return setCfgError('Payroll tax rate is required')
+                      if (!cfgDraft.payroll_expense_account_code) return setCfgError('Payroll expense account code is required')
+                      if (!cfgDraft.leave_entitlement_account_code) return setCfgError('Leave entitlement account code is required')
+                      if (!cfgDraft.superannuation_expense_account_code) return setCfgError('Superannuation expense account code is required')
+                      if (!cfgDraft.gst_payment_account_code) return setCfgError('GST payment account code is required')
+                      if (!cfgDraft.income_tax_payment_account_code) return setCfgError('Income tax payment account code is required')
+                      if (!cfgDraft.workers_compensation_account_code) return setCfgError('Workers compensation account code is required')
+                      if (!cfgDraft.payroll_tax_payment_account_code) return setCfgError('Payroll tax payment account code is required')
+                      
                       setCfgSaving(true)
                       setCfgError(null)
                       setCfgSaveSuccess(false)
@@ -1263,7 +1410,7 @@ export default function BudgetDetailPage() {
                       // Only save the specific fields we need
                       const payload = {
                         gst_frequency: cfgDraft?.gst_frequency || null,
-                        leave_entitlement_rate: cfgDraft?.leave_entitlement_rate || null,
+                        leave_entitlements_rate: cfgDraft?.leave_entitlements_rate || null,
                         superannuation_frequency: cfgDraft?.superannuation_frequency || null,
                         payroll_tax_rate: cfgDraft?.payroll_tax_rate || null,
                         payroll_expense_account_code: cfgDraft?.payroll_expense_account_code || null,
@@ -1343,6 +1490,174 @@ export default function BudgetDetailPage() {
           </div>
         </div>
       </section>
+    </div>
+  )
+}
+
+// Cash Flow Chart Component
+function CashFlowChart({ data, compact = false }: { data: any[], compact?: boolean }) {
+  // Process data to create daily cumulative totals
+  const processedData = data.reduce((acc: any, item: any) => {
+    const date = item.forecast_date
+    const amount = parseFloat(item.amount || 0)
+    
+    if (!acc[date]) {
+      acc[date] = 0
+    }
+    acc[date] += amount
+    
+    return acc
+  }, {})
+
+  // Sort dates and create cumulative running total
+  const sortedDates = Object.keys(processedData).sort()
+  let runningTotal = 0
+  const chartData = sortedDates.map(date => {
+    runningTotal += processedData[date]
+    return {
+      date,
+      dailyTotal: processedData[date],
+      cumulativeTotal: runningTotal
+    }
+  })
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'top' as const,
+        labels: {
+          color: '#d1d5db' // gray-300
+        }
+      },
+      title: {
+        display: true,
+        text: 'Cash Flow Forecast',
+        color: '#d1d5db' // gray-300
+      },
+      tooltip: {
+        mode: 'index' as const,
+        intersect: false,
+        callbacks: {
+          label: function(context: any) {
+            let label = context.dataset.label || ''
+            if (label) {
+              label += ': '
+            }
+            label += new Intl.NumberFormat('en-AU', {
+              style: 'currency',
+              currency: 'AUD'
+            }).format(context.parsed.y)
+            return label
+          }
+        }
+      }
+    },
+    scales: {
+      x: {
+        display: true,
+        title: {
+          display: true,
+          text: 'Date',
+          color: '#d1d5db' // gray-300
+        },
+        ticks: {
+          color: '#9ca3af', // gray-400
+          maxRotation: 45
+        },
+        grid: {
+          color: '#374151' // gray-700
+        }
+      },
+      y: {
+        display: true,
+        title: {
+          display: true,
+          text: 'Amount (AUD)',
+          color: '#d1d5db' // gray-300
+        },
+        ticks: {
+          color: '#9ca3af', // gray-400
+          callback: function(value: any) {
+            return new Intl.NumberFormat('en-AU', {
+              style: 'currency',
+              currency: 'AUD',
+              minimumFractionDigits: 0
+            }).format(value)
+          }
+        },
+        grid: {
+          color: '#374151' // gray-700
+        },
+        beginAtZero: false
+      }
+    }
+  }
+
+  const chartDataConfig = {
+    labels: chartData.map(item => new Date(item.date).toLocaleDateString('en-AU', { 
+      month: 'short', 
+      day: 'numeric' 
+    })),
+    datasets: [
+      {
+        type: 'bar' as const,
+        label: 'Daily Cash Flow',
+        data: chartData.map(item => item.dailyTotal),
+        backgroundColor: chartData.map(item => 
+          item.dailyTotal >= 0 ? 'rgba(34, 197, 94, 0.6)' : 'rgba(239, 68, 68, 0.6)'
+        ),
+        borderColor: chartData.map(item => 
+          item.dailyTotal >= 0 ? 'rgba(34, 197, 94, 1)' : 'rgba(239, 68, 68, 1)'
+        ),
+        borderWidth: 1,
+        yAxisID: 'y',
+      },
+      {
+        type: 'line' as const,
+        label: 'Running Total',
+        data: chartData.map(item => item.cumulativeTotal),
+        borderColor: 'rgba(59, 130, 246, 1)', // blue-500
+        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+        borderWidth: 3,
+        pointRadius: 4,
+        pointHoverRadius: 6,
+        tension: 0.1,
+        yAxisID: 'y',
+        fill: false,
+      }
+    ]
+  }
+
+  return (
+    <div className="space-y-4 h-full flex flex-col">
+      <div className="flex-1 relative w-full">
+        <Chart type="bar" data={chartDataConfig} options={chartOptions} />
+      </div>
+      
+      {/* Cumulative Cash Flow Summary - only show in fullscreen mode */}
+      {!compact && (
+        <div className="max-h-60 overflow-y-auto">
+          <h5 className="text-xs text-gray-400 mb-2">Daily Cash Flow Summary</h5>
+          <div className="grid grid-cols-3 gap-2 text-xs">
+            <div className="text-gray-400 font-medium">Date</div>
+            <div className="text-gray-400 font-medium">Daily Amount</div>
+            <div className="text-gray-400 font-medium">Running Total</div>
+            {chartData.map((item, index) => (
+              <React.Fragment key={index}>
+                <div className="text-gray-300">{new Date(item.date).toLocaleDateString('en-AU')}</div>
+                <div className={`${item.dailyTotal >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(item.dailyTotal)}
+                </div>
+                <div className={`font-medium ${item.cumulativeTotal >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(item.cumulativeTotal)}
+                </div>
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
