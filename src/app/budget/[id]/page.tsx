@@ -15,6 +15,7 @@ import {
   Tooltip,
   Legend,
   BarElement,
+  ArcElement,
 } from 'chart.js'
 import { Chart } from 'react-chartjs-2'
 
@@ -26,8 +27,12 @@ ChartJS.register(
   Title,
   Tooltip,
   Legend,
-  BarElement
+  BarElement,
+  ArcElement,
 )
+
+// Track plugin registration to avoid duplicate registrations across renders
+let zoomPluginRegistered = false
 
 export default function BudgetDetailPage() {
   const router = useRouter()
@@ -159,24 +164,24 @@ export default function BudgetDetailPage() {
   const onSaveBudget = async () => {
     if (!id || !budget || budgetSaving) return
     if (!newName.trim()) return
-    
+
     setBudgetSaving(true)
     setBudgetSaveSuccess(false)
     setError(null)
-    
+
     const { error } = await supabase.from('budget').update({ name: newName.trim() }).eq('id', id)
-    
+
     setBudgetSaving(false)
-    
+
     if (error) {
       setError(error.message)
       return
     }
-    
+
     setBudget((prev: any) => ({ ...prev, name: newName.trim() }))
     setNewName('')
     setBudgetSaveSuccess(true)
-    
+
     // Show success state for 2 seconds
     setTimeout(() => {
       setBudgetSaveSuccess(false)
@@ -194,18 +199,18 @@ export default function BudgetDetailPage() {
     setCalculatingCashFlow(true)
     setCashFlowSuccess(false)
     setError(null)
-    
+
     try {
-      const { data, error } = await supabase.rpc('recalculate_budget_cashflow', { 
-        p_budget_id: id 
+      const { data, error } = await supabase.rpc('recalculate_budget_cashflow', {
+        p_budget_id: id
       })
-      
+
       if (error) {
         setCalculatingCashFlow(false)
         setError(error.message)
         return
       }
-      
+
       // Log the results
       if (data) {
         console.log(`Success: ${data.success}`)
@@ -213,26 +218,26 @@ export default function BudgetDetailPage() {
         console.log(`Processed ${data.calculation_summary?.budget_details_processed || 0} budget details`)
         console.log(`Config processed: ${data.calculation_summary?.budget_config_processed || false}`)
       }
-      
+
       // Fetch the cash flow forecast data
       const { data: forecastData, error: forecastError } = await supabase
         .from('cashflow_forecast')
         .select('*')
         .eq('budget_id', id)
         .order('forecast_date', { ascending: true })
-      
+
       if (forecastError) {
         setCalculatingCashFlow(false)
         setError(forecastError.message)
         return
       }
-      
+
       setCashFlowData(forecastData || [])
       setCalculatingCashFlow(false)
       setCashFlowSuccess(true)
       setShowCashFlowChart(true)
       setShowCashFlowModal(true)
-      
+
       // Show success state for 3 seconds
       setTimeout(() => {
         setCashFlowSuccess(false)
@@ -351,18 +356,17 @@ export default function BudgetDetailPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Rename" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                  <button 
-                    onClick={onSaveBudget} 
+                  <button
+                    onClick={onSaveBudget}
                     disabled={budgetSaving || !newName.trim()}
-                    className={`px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2 ${
-                      budgetSaving 
-                        ? 'bg-yellow-300 text-gray-800 cursor-not-allowed' 
-                        : budgetSaveSuccess 
-                          ? 'bg-green-500 text-white' 
-                          : newName.trim()
-                            ? 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
-                            : 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                    }`}
+                    className={`px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2 ${budgetSaving
+                      ? 'bg-yellow-300 text-gray-800 cursor-not-allowed'
+                      : budgetSaveSuccess
+                        ? 'bg-green-500 text-white'
+                        : newName.trim()
+                          ? 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
+                          : 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                      }`}
                   >
                     {budgetSaving ? (
                       <>
@@ -380,9 +384,9 @@ export default function BudgetDetailPage() {
                       'Save'
                     )}
                   </button>
-                  <button 
-                    disabled={duplicating || budgetSaving} 
-                    onClick={duplicateBudget} 
+                  <button
+                    disabled={duplicating || budgetSaving}
+                    onClick={duplicateBudget}
                     className="bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-gray-200 border border-gray-700 px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2"
                   >
                     {duplicating ? (
@@ -429,701 +433,719 @@ export default function BudgetDetailPage() {
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm text-gray-300">Budget items</h3>
                     <div className="flex items-center gap-2">
-                      <button 
-                        className={`relative px-3 py-2 rounded-md text-sm transition-all duration-300 min-w-[140px] ${
-                          calculatingCashFlow 
-                            ? 'bg-green-600 text-white' 
-                            : cashFlowSuccess 
-                              ? 'bg-green-500 text-white' 
+                      <div className="flex flex-col items-start">
+                        <button
+                          className={`relative px-3 py-2 rounded-md text-sm transition-all duration-300 min-w-[140px] ${calculatingCashFlow
+                            ? 'bg-green-600 text-white'
+                            : cashFlowSuccess
+                              ? 'bg-green-500 text-white'
                               : 'bg-green-600 hover:bg-green-700 text-white disabled:opacity-50'
-                        }`}
-                        onClick={calculateCashFlow}
-                        disabled={!items.length || calculatingCashFlow}
-                      >
-                        <div className={`transition-opacity duration-300 ${calculatingCashFlow ? 'opacity-0' : 'opacity-100'}`}>
-                          {cashFlowSuccess ? '✓ Cash Flow Calculated' : 'Calculate Cash Flow'}
-                        </div>
-                        {calculatingCashFlow && (
-                          <div className="absolute inset-0 flex items-center justify-center">
-                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            }`}
+                          onClick={calculateCashFlow}
+                          disabled={!items.length || calculatingCashFlow}
+                        >
+                          <div className={`transition-opacity duration-300 ${calculatingCashFlow ? 'opacity-0' : 'opacity-100'}`}>
+                            {cashFlowSuccess ? '✓ Cash Flow Calculated' : 'Calculate Cash Flow'}
                           </div>
-                        )}
-                      </button>
+                          {calculatingCashFlow && (
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            </div>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/budget/${id}/breakdown`)}
+                          className="mt-1 text-[11px] text-blue-400 hover:text-blue-300 underline underline-offset-2"
+                        >
+                          Profit analysis
+                        </button>
+                      </div>
                       <button className="text-yellow-300 text-xs" onClick={() => setAddOpen(v => !v)}>{addOpen ? 'Cancel' : 'Add item'}</button>
                     </div>
                   </div>
 
-                {/* Cash Flow Chart Preview */}
-                {showCashFlowChart && cashFlowData.length > 0 && (
-                  <div className="mb-6 p-4 bg-gray-900/60 border border-gray-800 rounded">
-                    <div className="flex items-center justify-between mb-4">
-                      <h4 className="text-sm text-gray-300 font-medium">Cash Flow Forecast</h4>
-                      <div className="flex items-center gap-2">
-                        <button 
-                          className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs"
-                          onClick={() => setShowCashFlowModal(true)}
-                        >
-                          View Fullscreen
-                        </button>
-                        <button 
-                          className="text-gray-400 hover:text-gray-300 text-xs"
-                          onClick={() => setShowCashFlowChart(false)}
-                        >
-                          ✕ Close
-                        </button>
+                  {/* Cash Flow Chart Preview */}
+                  {showCashFlowChart && cashFlowData.length > 0 && (
+                    <div className="mb-6 p-4 bg-gray-900/60 border border-gray-800 rounded w-full">
+                      <div className="flex items-center justify-between mb-4">
+                        <h4 className="text-sm text-gray-300 font-medium">Cash Flow Forecast</h4>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs"
+                            onClick={() => setShowCashFlowModal(true)}
+                          >
+                            View Fullscreen
+                          </button>
+                          <button
+                            className="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1 rounded text-xs"
+                            onClick={() => router.push(`/budget/${id}/breakdown`)}
+                          >
+                            View Breakdown
+                          </button>
+                          <button
+                            className="text-gray-400 hover:text-gray-300 text-xs"
+                            onClick={() => setShowCashFlowChart(false)}
+                          >
+                            ✕ Close
+                          </button>
+                        </div>
+                      </div>
+                      <div className="h-40 w-full">
+                        <CashFlowChart data={cashFlowData} compact={true} />
+                      </div>
+                      <div className="mt-2 text-xs text-gray-400 text-center">
+                        Click "View Fullscreen" for detailed view
                       </div>
                     </div>
-                    <div className="h-40">
-                      <CashFlowChart data={cashFlowData} compact={true} />
-                    </div>
-                    <div className="mt-2 text-xs text-gray-400 text-center">
-                      Click "View Fullscreen" for detailed view
-                    </div>
-                  </div>
-                )}
+                  )}
 
-                {/* Fullscreen Cash Flow Modal */}
-                {showCashFlowModal && (
-                  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 rounded-lg shadow-xl w-[95vw] h-[95vh] max-w-7xl flex flex-col">
-                      <div className="flex items-center justify-between p-4 border-b border-gray-700">
-                        <h3 className="text-lg font-medium text-gray-100">Cash Flow Forecast - Detailed View</h3>
-                        <button 
-                          className="text-gray-400 hover:text-gray-300 text-xl"
-                          onClick={() => setShowCashFlowModal(false)}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      <div className="flex-1 p-4 overflow-hidden">
-                        <CashFlowChart data={cashFlowData} compact={false} />
+                  {/* Fullscreen Cash Flow Modal */}
+                  {showCashFlowModal && (
+                    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                      <div className="bg-gray-900 rounded-lg shadow-xl w-[98vw] h-[95vh] flex flex-col">
+                        <div className="flex items-center justify-between p-4 border-b border-gray-700">
+                          <h3 className="text-lg font-medium text-gray-100">Cash Flow Forecast - Detailed View</h3>
+                          <button
+                            className="text-gray-400 hover:text-gray-300 text-xl"
+                            onClick={() => setShowCashFlowModal(false)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <div className="flex-1 p-4 overflow-hidden w-full">
+                          <CashFlowChart data={cashFlowData} compact={false} />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  )}
 
-                {addOpen && (
-                  <div className="mb-4 p-3 bg-gray-900/60 border border-gray-800 rounded space-y-3">
-                    <div className="flex gap-2">
-                      <select value={addType} onChange={(e) => { 
-                        const v = e.target.value; 
-                        setAddType(v); 
-                        // Initialize with one entry for date-based types
-                        if (v === 'expense_on_dates' || v === 'project_income_on_dates') {
-                          setAddAttrs({ dateAmountEntries: [{ date: '', amount: '' }] }); 
-                        } else {
-                          setAddAttrs({});
-                        }
-                        if (!addName) setAddName(v) 
-                      }} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
-                        <option value="">Select type</option>
-                        <option value="owners_capital_added">owners_capital_added</option>
-                        <option value="owners_capital_withdrawal">owners_capital_withdrawal</option>
-                        <option value="fixed_expense_recurring">fixed_expense_recurring</option>
-                        <option value="expense_on_dates">expense_on_dates</option>
-                        <option value="staff_payroll">staff_payroll</option>
-                        <option value="project_income_on_dates">project_income_on_dates</option>
-                        <option value="project_income_recurring">project_income_recurring</option>
-                      </select>
-                      <input value={addName} onChange={(e) => setAddName(e.target.value)} placeholder="Item name" className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                    </div>
-
-                    {addType === 'owners_capital_added' || addType === 'owners_capital_withdrawal' ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Amount</label>
-                          <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Date</label>
-                          <input type="date" value={addAttrs.date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                      </div>
-                    ) : addType === 'fixed_expense_recurring' || addType === 'project_income_recurring' ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Amount</label>
-                          <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Tax code</label>
-                          <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
-                            <option value="">Select tax code</option>
-                            <option value="gst">gst</option>
-                            <option value="gstfree">gstfree</option>
-                          </select>
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Frequency</label>
-                          <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
-                            <option value="">Select frequency</option>
-                            <option value="monthly">monthly</option>
-                            <option value="weekly">weekly</option>
-                            <option value="yearly">yearly</option>
-                          </select>
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Interval</label>
-                          <input type="number" value={addAttrs.interval ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, interval: Number(e.target.value) }))} placeholder="Interval" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Start date</label>
-                          <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">End date</label>
-                          <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                      </div>
-                    ) : addType === 'expense_on_dates' || addType === 'project_income_on_dates' ? (
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs text-gray-300">Date & Amount Entries</label>
-                          <div className="flex gap-2">
-                            {(addAttrs.dateAmountEntries || []).length > 0 && (
-                              <button 
-                                type="button"
-                                className="bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded text-xs"
-                                onClick={() => setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: [] }))}
-                              >
-                                Clear All
-                              </button>
-                            )}
-                            <button 
-                              type="button"
-                              className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs"
-                              onClick={() => {
-                                const currentEntries = addAttrs.dateAmountEntries || []
-                                setAddAttrs((prev: any) => ({ 
-                                  ...prev, 
-                                  dateAmountEntries: [...currentEntries, { date: '', amount: '' }] 
-                                }))
-                              }}
-                            >
-                              Add Entry
-                            </button>
-                          </div>
-                        </div>
-                        
-                        {(addAttrs.dateAmountEntries || []).length === 0 ? (
-                          <div className="text-gray-500 text-sm italic text-center py-4 border border-gray-700 rounded border-dashed">
-                            Click "Add Entry" to add date and amount pairs
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {(addAttrs.dateAmountEntries || []).map((entry: any, index: number) => (
-                              <div key={index} className="flex gap-2 items-center">
-                                <div className="flex-1">
-                                  <input 
-                                    type="date" 
-                                    value={entry.date || ''} 
-                                    onChange={(e) => {
-                                      const newEntries = [...(addAttrs.dateAmountEntries || [])]
-                                      newEntries[index] = { ...newEntries[index], date: e.target.value }
-                                      setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
-                                    }}
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" 
-                                    required
-                                  />
-                                </div>
-                                <div className="flex-1">
-                                  <input 
-                                    type="number" 
-                                    step="0.01"
-                                    value={entry.amount || ''} 
-                                    onChange={(e) => {
-                                      const newEntries = [...(addAttrs.dateAmountEntries || [])]
-                                      newEntries[index] = { ...newEntries[index], amount: e.target.value }
-                                      setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
-                                    }}
-                                    placeholder="Amount" 
-                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" 
-                                    required
-                                  />
-                                </div>
-                                <button 
-                                  type="button"
-                                  className="text-red-400 hover:text-red-300 px-2 py-1"
-                                  onClick={() => {
-                                    const newEntries = (addAttrs.dateAmountEntries || []).filter((_: any, i: number) => i !== index)
-                                    setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
-                                  }}
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Tax code</label>
-                          <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
-                            <option value="">Select tax code</option>
-                            <option value="gst">gst</option>
-                            <option value="gstfree">gstfree</option>
-                          </select>
-                        </div>
-                      </div>
-                    ) : addType === 'staff_payroll' ? (
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Frequency</label>
-                          <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
-                            <option value="">Select frequency</option>
-                            <option value="monthly">monthly</option>
-                            <option value="weekly">weekly</option>
-                            <option value="yearly">yearly</option>
-                          </select>
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Start date</label>
-                          <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">End date</label>
-                          <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Hourly rate</label>
-                          <input value={addAttrs.hourly_rate ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hourly_rate: e.target.value }))} placeholder="Hourly rate" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Hours per pay period</label>
-                          <input value={addAttrs.hours_per_pay_period ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hours_per_pay_period: e.target.value }))} placeholder="Hours per pay period" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
-                        </div>
-                        <div className="flex flex-col">
-                          <label className="text-xs text-gray-300 mb-1">Leave entitlement</label>
-                          <select value={addAttrs.leave_entitlement ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, leave_entitlement: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
-                            <option value="">Select leave entitlement</option>
-                            <option value="yes">yes</option>
-                            <option value="no">no</option>
-                          </select>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div>
-                      <button className="bg-yellow-400 text-gray-900 px-3 py-2 rounded-md" onClick={async () => {
-                        const type = addType
-                        const name = (addName || addType || '').trim()
-                        if (!type) return setError('Select an item type')
-                        if (!name) return setError('Enter item name')
-                        
-                        // Validate required fields based on type
-                        const a = addAttrs || {}
-                        if (type === 'owners_capital_added' || type === 'owners_capital_withdrawal') {
-                          if (!a.amount) return setError('Amount is required')
-                          if (!a.date) return setError('Date is required')
-                        } else if (type === 'fixed_expense_recurring' || type === 'project_income_recurring') {
-                          if (!a.amount) return setError('Amount is required')
-                          if (!a.taxcode) return setError('Tax code is required')
-                          if (!a.frequency) return setError('Frequency is required')
-                          if (!a.interval) return setError('Interval is required')
-                          if (!a.start_date) return setError('Start date is required')
-                          if (!a.end_date) return setError('End date is required')
-                        } else if (type === 'expense_on_dates' || type === 'project_income_on_dates') {
-                          const entries = a.dateAmountEntries || []
-                          if (entries.length === 0) return setError('At least one date and amount entry is required')
-                          for (let i = 0; i < entries.length; i++) {
-                            if (!entries[i].date) return setError(`Date is required for entry ${i + 1}`)
-                            if (!entries[i].amount) return setError(`Amount is required for entry ${i + 1}`)
+                  {addOpen && (
+                    <div className="mb-4 p-3 bg-gray-900/60 border border-gray-800 rounded space-y-3">
+                      <div className="flex gap-2">
+                        <select value={addType} onChange={(e) => {
+                          const v = e.target.value;
+                          setAddType(v);
+                          // Initialize with one entry for date-based types
+                          if (v === 'expense_on_dates' || v === 'project_income_on_dates') {
+                            setAddAttrs({ dateAmountEntries: [{ date: '', amount: '' }] });
+                          } else {
+                            setAddAttrs({});
                           }
-                          if (!a.taxcode) return setError('Tax code is required')
-                        } else if (type === 'staff_payroll') {
-                          if (!a.frequency) return setError('Frequency is required')
-                          if (!a.start_date) return setError('Start date is required')
-                          if (!a.end_date) return setError('End date is required')
-                          if (!a.hourly_rate) return setError('Hourly rate is required')
-                          if (!a.hours_per_pay_period) return setError('Hours per pay period is required')
-                          if (!a.leave_entitlement) return setError('Leave entitlement is required')
-                        }
+                          if (!addName) setAddName(v)
+                        }} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                          <option value="">Select type</option>
+                          <option value="owners_capital_added">owners_capital_added</option>
+                          <option value="owners_capital_withdrawal">owners_capital_withdrawal</option>
+                          <option value="fixed_expense_recurring">fixed_expense_recurring</option>
+                          <option value="expense_on_dates">expense_on_dates</option>
+                          <option value="staff_payroll">staff_payroll</option>
+                          <option value="project_income_on_dates">project_income_on_dates</option>
+                          <option value="project_income_recurring">project_income_recurring</option>
+                        </select>
+                        <input value={addName} onChange={(e) => setAddName(e.target.value)} placeholder="Item name" className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                      </div>
 
-                        let attributes: any = {}
-                        try {
-                          switch (type) {
-                            case 'owners_capital_added':
-                            case 'owners_capital_withdrawal':
-                              attributes = { amount: a.amount ? Number(a.amount) : null, date: a.date || null }
-                              break
-                            case 'fixed_expense_recurring':
-                            case 'project_income_recurring':
-                              attributes = {
-                                amount: a.amount ? Number(a.amount) : null,
-                                taxcode: a.taxcode || null,
-                                frequency: a.frequency || null,
-                                interval: a.interval ?? null,
-                                start_date: a.start_date || null,
-                                end_date: a.end_date || null,
-                              }
-                              break
-                            case 'expense_on_dates':
-                            case 'project_income_on_dates':
-                              // Convert user-friendly format to backend format
-                              const entries = a.dateAmountEntries || []
-                              const dates = entries.map((entry: any) => entry.date).filter(Boolean)
-                              const amounts = entries.map((entry: any) => Number(entry.amount || 0))
-                              attributes = { dates, amount_array: amounts, taxcode: a.taxcode || null }
-                              break
-                            case 'staff_payroll':
-                              attributes = {
-                                frequency: a.frequency || null,
-                                start_date: a.start_date || null,
-                                end_date: a.end_date || null,
-                                hourly_rate: a.hourly_rate ? Number(a.hourly_rate) : null,
-                                hours_per_pay_period: a.hours_per_pay_period ? Number(a.hours_per_pay_period) : null,
-                                leave_entitlement: a.leave_entitlement || null,
-                              }
-                              break
-                            default:
-                              attributes = { raw: a }
-                          }
-                        } catch (err: any) {
-                          return setError(String(err?.message || err))
-                        }
-
-                        const { data, error: insertErr } = await supabase.from('budget_details').insert({
-                          budget_id: id,
-                          name,
-                          item_type: type,
-                          attributes,
-                        }).select('*').maybeSingle()
-                        if (insertErr) return setError(insertErr.message)
-                        if (data) setItems(prev => [data, ...prev])
-                        setAddOpen(false)
-                        setAddName('')
-                        setAddType('')
-                        setAddAttrs({})
-                      }}>Add</button>
-                    </div>
-                  </div>
-                )}
-
-                {items.length === 0 ? (
-                  <div className="text-gray-400 text-sm">No items yet.</div>
-                ) : (
-                  <ul className="space-y-2">
-                    {items.map(it => (
-                      <li key={it.id} className="p-3 bg-gray-900/60 border border-gray-800 rounded">
-                        {editOpenId === String(it.id) ? (
-                          <div className="space-y-3">
-                            <div className="flex gap-2">
-                              <select value={editType} onChange={(e) => { 
-                                const v = e.target.value; 
-                                setEditType(v); 
-                                // Initialize with one entry for date-based types if switching types
-                                if (v === 'expense_on_dates' || v === 'project_income_on_dates') {
-                                  setEditAttrs({ dateAmountEntries: [{ date: '', amount: '' }] }); 
-                                } else {
-                                  setEditAttrs({});
-                                }
-                              }} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                                <option value="">Select type</option>
-                                <option value="owners_capital_added">owners_capital_added</option>
-                                <option value="owners_capital_withdrawal">owners_capital_withdrawal</option>
-                                <option value="fixed_expense_recurring">fixed_expense_recurring</option>
-                                <option value="expense_on_dates">expense_on_dates</option>
-                                <option value="staff_payroll">staff_payroll</option>
-                                <option value="project_income_on_dates">project_income_on_dates</option>
-                                <option value="project_income_recurring">project_income_recurring</option>
-                              </select>
-                              <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Item name" className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                            </div>
-
-                            {editType === 'owners_capital_added' || editType === 'owners_capital_withdrawal' ? (
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Amount</label>
-                                  <input value={editAttrs.amount ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Date</label>
-                                  <input type="date" value={editAttrs.date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                              </div>
-                            ) : editType === 'fixed_expense_recurring' || editType === 'project_income_recurring' ? (
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Amount</label>
-                                  <input value={editAttrs.amount ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Tax code</label>
-                                  <select value={editAttrs.taxcode ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                                    <option value="">Tax code</option>
-                                    <option value="gst">gst</option>
-                                    <option value="gstfree">gstfree</option>
-                                  </select>
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Frequency</label>
-                                  <select value={editAttrs.frequency ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                                    <option value="">Frequency</option>
-                                    <option value="monthly">monthly</option>
-                                    <option value="weekly">weekly</option>
-                                    <option value="yearly">yearly</option>
-                                  </select>
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Interval</label>
-                                  <input type="number" value={editAttrs.interval ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, interval: Number(e.target.value) }))} placeholder="Interval" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Start date</label>
-                                  <input type="date" value={editAttrs.start_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">End date</label>
-                                  <input type="date" value={editAttrs.end_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                              </div>
-                            ) : editType === 'expense_on_dates' || editType === 'project_income_on_dates' ? (
-                              <div className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                  <label className="text-xs text-gray-300">Date & Amount Entries</label>
-                                  <div className="flex gap-2">
-                                    {(editAttrs.dateAmountEntries || []).length > 0 && (
-                                      <button 
-                                        type="button"
-                                        className="bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded text-xs"
-                                        onClick={() => setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: [] }))}
-                                      >
-                                        Clear All
-                                      </button>
-                                    )}
-                                    <button 
-                                      type="button"
-                                      className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs"
-                                      onClick={() => {
-                                        const currentEntries = editAttrs.dateAmountEntries || []
-                                        setEditAttrs((prev: any) => ({ 
-                                          ...prev, 
-                                          dateAmountEntries: [...currentEntries, { date: '', amount: '' }] 
-                                        }))
-                                      }}
-                                    >
-                                      Add Entry
-                                    </button>
-                                  </div>
-                                </div>
-                                
-                                {(editAttrs.dateAmountEntries || []).length === 0 ? (
-                                  <div className="text-gray-500 text-sm italic text-center py-4 border border-gray-700 rounded border-dashed">
-                                    Click "Add Entry" to add date and amount pairs
-                                  </div>
-                                ) : (
-                                  <div className="space-y-2">
-                                    {(editAttrs.dateAmountEntries || []).map((entry: any, index: number) => (
-                                      <div key={index} className="flex gap-2 items-center">
-                                        <div className="flex-1">
-                                          <input 
-                                            type="date" 
-                                            value={entry.date || ''} 
-                                            onChange={(e) => {
-                                              const newEntries = [...(editAttrs.dateAmountEntries || [])]
-                                              newEntries[index] = { ...newEntries[index], date: e.target.value }
-                                              setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
-                                            }}
-                                            className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" 
-                                          />
-                                        </div>
-                                        <div className="flex-1">
-                                          <input 
-                                            type="number" 
-                                            step="0.01"
-                                            value={entry.amount || ''} 
-                                            onChange={(e) => {
-                                              const newEntries = [...(editAttrs.dateAmountEntries || [])]
-                                              newEntries[index] = { ...newEntries[index], amount: e.target.value }
-                                              setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
-                                            }}
-                                            placeholder="Amount" 
-                                            className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" 
-                                          />
-                                        </div>
-                                        <button 
-                                          type="button"
-                                          className="text-red-400 hover:text-red-300 px-2 py-1"
-                                          onClick={() => {
-                                            const newEntries = (editAttrs.dateAmountEntries || []).filter((_: any, i: number) => i !== index)
-                                            setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
-                                          }}
-                                        >
-                                          ✕
-                                        </button>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                                
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Tax code</label>
-                                  <select value={editAttrs.taxcode ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                                    <option value="">Tax code</option>
-                                    <option value="gst">gst</option>
-                                    <option value="gstfree">gstfree</option>
-                                  </select>
-                                </div>
-                              </div>
-                            ) : editType === 'staff_payroll' ? (
-                              <div className="grid grid-cols-2 gap-3">
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Frequency</label>
-                                  <select value={editAttrs.frequency ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                                    <option value="">Frequency</option>
-                                    <option value="monthly">monthly</option>
-                                    <option value="weekly">weekly</option>
-                                    <option value="yearly">yearly</option>
-                                  </select>
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Start date</label>
-                                  <input type="date" value={editAttrs.start_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">End date</label>
-                                  <input type="date" value={editAttrs.end_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Hourly rate</label>
-                                  <input value={editAttrs.hourly_rate ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, hourly_rate: e.target.value }))} placeholder="Hourly rate" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Hours per pay period</label>
-                                  <input value={editAttrs.hours_per_pay_period ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, hours_per_pay_period: e.target.value }))} placeholder="Hours per pay period" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
-                                </div>
-                                <div className="flex flex-col">
-                                  <label className="text-xs text-gray-300 mb-1">Leave entitlement</label>
-                                  <select value={editAttrs.leave_entitlement ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, leave_entitlement: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
-                                    <option value="">Leave entitlement</option>
-                                    <option value="yes">yes</option>
-                                    <option value="no">no</option>
-                                  </select>
-                                </div>
-                              </div>
-                            ) : null}
-
-                            <div className="flex gap-2">
-                              <button disabled={editSaving} className="bg-yellow-400 text-gray-900 px-3 py-2 rounded-md disabled:opacity-50" onClick={async () => {
-                                const type = editType
-                                const name = (editName || editType || '').trim()
-                                if (!type) return setError('Select an item type')
-                                if (!name) return setError('Enter item name')
-                                setEditSaving(true)
-                                let attributes: any = {}
-                                const a = editAttrs || {}
-                                try {
-                                  switch (type) {
-                                    case 'owners_capital_added':
-                                    case 'owners_capital_withdrawal':
-                                      attributes = { amount: a.amount ? Number(a.amount) : null, date: a.date || null }
-                                      break
-                                    case 'fixed_expense_recurring':
-                                    case 'project_income_recurring':
-                                      attributes = {
-                                        amount: a.amount ? Number(a.amount) : null,
-                                        taxcode: a.taxcode || null,
-                                        frequency: a.frequency || null,
-                                        interval: a.interval ?? null,
-                                        start_date: a.start_date || null,
-                                        end_date: a.end_date || null,
-                                      }
-                                      break
-                                    case 'expense_on_dates':
-                                    case 'project_income_on_dates':
-                                      // Convert user-friendly format to backend format
-                                      const editEntries = a.dateAmountEntries || []
-                                      const editDates = editEntries.map((entry: any) => entry.date).filter(Boolean)
-                                      const editAmounts = editEntries.map((entry: any) => Number(entry.amount || 0))
-                                      attributes = { dates: editDates, amount_array: editAmounts, taxcode: a.taxcode || null }
-                                      break
-                                    case 'staff_payroll':
-                                      attributes = {
-                                        frequency: a.frequency || null,
-                                        start_date: a.start_date || null,
-                                        end_date: a.end_date || null,
-                                        hourly_rate: a.hourly_rate ? Number(a.hourly_rate) : null,
-                                        hours_per_pay_period: a.hours_per_pay_period ? Number(a.hours_per_pay_period) : null,
-                                        leave_entitlement: a.leave_entitlement || null,
-                                      }
-                                      break
-                                    default:
-                                      attributes = { raw: a }
-                                  }
-                                } catch (err: any) {
-                                  setEditSaving(false)
-                                  return setError(String(err?.message || err))
-                                }
-
-                                const { data, error: updErr } = await supabase.from('budget_details').update({
-                                  name,
-                                  item_type: type,
-                                  attributes,
-                                }).eq('id', it.id).select('*').maybeSingle()
-                                setEditSaving(false)
-                                if (updErr) return setError(updErr.message)
-                                if (data) setItems(prev => prev.map(p => String(p.id) === String(it.id) ? data : p))
-                                setEditOpenId(null)
-                                setEditType('')
-                                setEditName('')
-                                setEditAttrs({})
-                              }}>Save</button>
-                              <button className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-2 rounded-md" onClick={() => { setEditOpenId(null); setEditType(''); setEditName(''); setEditAttrs({}) }}>Cancel</button>
-                            </div>
+                      {addType === 'owners_capital_added' || addType === 'owners_capital_withdrawal' ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Amount</label>
+                            <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
                           </div>
-                        ) : (
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Date</label>
+                            <input type="date" value={addAttrs.date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                        </div>
+                      ) : addType === 'fixed_expense_recurring' || addType === 'project_income_recurring' ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Amount</label>
+                            <input value={addAttrs.amount ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Tax code</label>
+                            <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                              <option value="">Select tax code</option>
+                              <option value="gst">gst</option>
+                              <option value="gstfree">gstfree</option>
+                            </select>
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Frequency</label>
+                            <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                              <option value="">Select frequency</option>
+                              <option value="daily">daily</option>
+                              <option value="weekly">weekly</option>
+                              <option value="monthly">monthly</option>
+                              <option value="yearly">yearly</option>
+                            </select>
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Interval</label>
+                            <input type="number" value={addAttrs.interval ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, interval: Number(e.target.value) }))} placeholder="Interval" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Start date</label>
+                            <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">End date</label>
+                            <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                        </div>
+                      ) : addType === 'expense_on_dates' || addType === 'project_income_on_dates' ? (
+                        <div className="space-y-3">
                           <div className="flex items-center justify-between">
-                            <div>
-                              <div className="text-gray-100">{it.name}</div>
-                              <div className="text-gray-400 text-xs">{it.item_type}</div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <button className="text-yellow-300 text-xs" onClick={() => {
-                                setEditOpenId(String(it.id))
-                                setEditType(it.item_type || '')
-                                setEditName(it.name || '')
-                                const a = it.attributes || {}
-                                let norm = { ...a }
-                                if (it.item_type === 'expense_on_dates' || it.item_type === 'project_income_on_dates') {
-                                  // Convert backend format to user-friendly format
-                                  const dates = Array.isArray(a.dates) ? a.dates : (a.dates || '').split(',').map((s: string) => s.trim()).filter(Boolean)
-                                  const amounts = Array.isArray(a.amount_array) ? a.amount_array : (a.amount_array || '').split(',').map((s: string) => s.trim()).filter(Boolean)
-                                  const dateAmountEntries = dates.map((date: string, index: number) => ({
-                                    date: date,
-                                    amount: amounts[index] || ''
+                            <label className="text-xs text-gray-300">Date & Amount Entries</label>
+                            <div className="flex gap-2">
+                              {(addAttrs.dateAmountEntries || []).length > 0 && (
+                                <button
+                                  type="button"
+                                  className="bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded text-xs"
+                                  onClick={() => setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: [] }))}
+                                >
+                                  Clear All
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs"
+                                onClick={() => {
+                                  const currentEntries = addAttrs.dateAmountEntries || []
+                                  setAddAttrs((prev: any) => ({
+                                    ...prev,
+                                    dateAmountEntries: [...currentEntries, { date: '', amount: '' }]
                                   }))
-                                  norm = {
-                                    ...norm,
-                                    dateAmountEntries,
-                                    // Keep original format for backwards compatibility
-                                    dates: Array.isArray(a.dates) ? a.dates.join(', ') : (a.dates || ''),
-                                    amount_array: Array.isArray(a.amount_array) ? a.amount_array.join(', ') : (a.amount_array || ''),
-                                  }
-                                }
-                                if (it.item_type === 'owners_capital_added' || it.item_type === 'owners_capital_withdrawal') {
-                                  norm = { ...norm, amount: a.amount ?? '' }
-                                }
-                                if (it.item_type === 'fixed_expense_recurring' || it.item_type === 'project_income_recurring') {
-                                  norm = { ...norm, amount: a.amount ?? '', interval: a.interval ?? '' }
-                                }
-                                if (it.item_type === 'staff_payroll') {
-                                  norm = {
-                                    ...norm,
-                                    hourly_rate: a.hourly_rate ?? '',
-                                    hours_per_pay_period: a.hours_per_pay_period ?? '',
-                                  }
-                                }
-                                setEditAttrs(norm)
-                              }}>Edit</button>
-                              <button className="text-red-400 text-xs" onClick={() => deleteItem(it.id)}>Delete</button>
+                                }}
+                              >
+                                Add Entry
+                              </button>
                             </div>
                           </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
+
+                          {(addAttrs.dateAmountEntries || []).length === 0 ? (
+                            <div className="text-gray-500 text-sm italic text-center py-4 border border-gray-700 rounded border-dashed">
+                              Click "Add Entry" to add date and amount pairs
+                            </div>
+                          ) : (
+                            <div className="space-y-2">
+                              {(addAttrs.dateAmountEntries || []).map((entry: any, index: number) => (
+                                <div key={index} className="flex gap-2 items-center">
+                                  <div className="flex-1">
+                                    <input
+                                      type="date"
+                                      value={entry.date || ''}
+                                      onChange={(e) => {
+                                        const newEntries = [...(addAttrs.dateAmountEntries || [])]
+                                        newEntries[index] = { ...newEntries[index], date: e.target.value }
+                                        setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
+                                      }}
+                                      className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
+                                      required
+                                    />
+                                  </div>
+                                  <div className="flex-1">
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      value={entry.amount || ''}
+                                      onChange={(e) => {
+                                        const newEntries = [...(addAttrs.dateAmountEntries || [])]
+                                        newEntries[index] = { ...newEntries[index], amount: e.target.value }
+                                        setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
+                                      }}
+                                      placeholder="Amount"
+                                      className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
+                                      required
+                                    />
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="text-red-400 hover:text-red-300 px-2 py-1"
+                                    onClick={() => {
+                                      const newEntries = (addAttrs.dateAmountEntries || []).filter((_: any, i: number) => i !== index)
+                                      setAddAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Tax code</label>
+                            <select value={addAttrs.taxcode ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                              <option value="">Select tax code</option>
+                              <option value="gst">gst</option>
+                              <option value="gstfree">gstfree</option>
+                            </select>
+                          </div>
+                        </div>
+                      ) : addType === 'staff_payroll' ? (
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Frequency</label>
+                            <select value={addAttrs.frequency ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                              <option value="">Select frequency</option>
+                              <option value="daily">daily</option>
+                              <option value="weekly">weekly</option>
+                              <option value="monthly">monthly</option>
+                              <option value="yearly">yearly</option>
+                            </select>
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Start date</label>
+                            <input type="date" value={addAttrs.start_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">End date</label>
+                            <input type="date" value={addAttrs.end_date ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Hourly rate</label>
+                            <input value={addAttrs.hourly_rate ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hourly_rate: e.target.value }))} placeholder="Hourly rate" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Hours per pay period</label>
+                            <input value={addAttrs.hours_per_pay_period ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, hours_per_pay_period: e.target.value }))} placeholder="Hours per pay period" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required />
+                          </div>
+                          <div className="flex flex-col">
+                            <label className="text-xs text-gray-300 mb-1">Leave entitlement</label>
+                            <select value={addAttrs.leave_entitlement ?? ''} onChange={(e) => setAddAttrs((prev: any) => ({ ...prev, leave_entitlement: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" required>
+                              <option value="">Select leave entitlement</option>
+                              <option value="yes">yes</option>
+                              <option value="no">no</option>
+                            </select>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div>
+                        <button className="bg-yellow-400 text-gray-900 px-3 py-2 rounded-md" onClick={async () => {
+                          const type = addType
+                          const name = (addName || addType || '').trim()
+                          if (!type) return setError('Select an item type')
+                          if (!name) return setError('Enter item name')
+
+                          // Validate required fields based on type
+                          const a = addAttrs || {}
+                          if (type === 'owners_capital_added' || type === 'owners_capital_withdrawal') {
+                            if (!a.amount) return setError('Amount is required')
+                            if (!a.date) return setError('Date is required')
+                          } else if (type === 'fixed_expense_recurring' || type === 'project_income_recurring') {
+                            if (!a.amount) return setError('Amount is required')
+                            if (!a.taxcode) return setError('Tax code is required')
+                            if (!a.frequency) return setError('Frequency is required')
+                            if (!a.interval) return setError('Interval is required')
+                            if (!a.start_date) return setError('Start date is required')
+                            if (!a.end_date) return setError('End date is required')
+                          } else if (type === 'expense_on_dates' || type === 'project_income_on_dates') {
+                            const entries = a.dateAmountEntries || []
+                            if (entries.length === 0) return setError('At least one date and amount entry is required')
+                            for (let i = 0; i < entries.length; i++) {
+                              if (!entries[i].date) return setError(`Date is required for entry ${i + 1}`)
+                              if (!entries[i].amount) return setError(`Amount is required for entry ${i + 1}`)
+                            }
+                            if (!a.taxcode) return setError('Tax code is required')
+                          } else if (type === 'staff_payroll') {
+                            if (!a.frequency) return setError('Frequency is required')
+                            if (!a.start_date) return setError('Start date is required')
+                            if (!a.end_date) return setError('End date is required')
+                            if (!a.hourly_rate) return setError('Hourly rate is required')
+                            if (!a.hours_per_pay_period) return setError('Hours per pay period is required')
+                            if (!a.leave_entitlement) return setError('Leave entitlement is required')
+                          }
+
+                          let attributes: any = {}
+                          try {
+                            switch (type) {
+                              case 'owners_capital_added':
+                              case 'owners_capital_withdrawal':
+                                attributes = { amount: a.amount ? Number(a.amount) : null, date: a.date || null }
+                                break
+                              case 'fixed_expense_recurring':
+                              case 'project_income_recurring':
+                                attributes = {
+                                  amount: a.amount ? Number(a.amount) : null,
+                                  taxcode: a.taxcode || null,
+                                  frequency: a.frequency || null,
+                                  interval: a.interval ?? null,
+                                  start_date: a.start_date || null,
+                                  end_date: a.end_date || null,
+                                }
+                                break
+                              case 'expense_on_dates':
+                              case 'project_income_on_dates':
+                                // Convert user-friendly format to backend format
+                                const entries = a.dateAmountEntries || []
+                                const dates = entries.map((entry: any) => entry.date).filter(Boolean)
+                                const amounts = entries.map((entry: any) => Number(entry.amount || 0))
+                                attributes = { dates, amount_array: amounts, taxcode: a.taxcode || null }
+                                break
+                              case 'staff_payroll':
+                                attributes = {
+                                  frequency: a.frequency || null,
+                                  start_date: a.start_date || null,
+                                  end_date: a.end_date || null,
+                                  hourly_rate: a.hourly_rate ? Number(a.hourly_rate) : null,
+                                  hours_per_pay_period: a.hours_per_pay_period ? Number(a.hours_per_pay_period) : null,
+                                  leave_entitlement: a.leave_entitlement || null,
+                                }
+                                break
+                              default:
+                                attributes = { raw: a }
+                            }
+                          } catch (err: any) {
+                            return setError(String(err?.message || err))
+                          }
+
+                          const { data, error: insertErr } = await supabase.from('budget_details').insert({
+                            budget_id: id,
+                            name,
+                            item_type: type,
+                            attributes,
+                          }).select('*').maybeSingle()
+                          if (insertErr) return setError(insertErr.message)
+                          if (data) setItems(prev => [data, ...prev])
+                          setAddOpen(false)
+                          setAddName('')
+                          setAddType('')
+                          setAddAttrs({})
+                        }}>Add</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {items.length === 0 ? (
+                    <div className="text-gray-400 text-sm">No items yet.</div>
+                  ) : (
+                    <ul className="space-y-2">
+                      {items.map(it => (
+                        <li key={it.id} className="p-3 bg-gray-900/60 border border-gray-800 rounded">
+                          {editOpenId === String(it.id) ? (
+                            <div className="space-y-3">
+                              <div className="flex gap-2">
+                                <select value={editType} onChange={(e) => {
+                                  const v = e.target.value;
+                                  setEditType(v);
+                                  // Initialize with one entry for date-based types if switching types
+                                  if (v === 'expense_on_dates' || v === 'project_income_on_dates') {
+                                    setEditAttrs({ dateAmountEntries: [{ date: '', amount: '' }] });
+                                  } else {
+                                    setEditAttrs({});
+                                  }
+                                }} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                                  <option value="">Select type</option>
+                                  <option value="owners_capital_added">owners_capital_added</option>
+                                  <option value="owners_capital_withdrawal">owners_capital_withdrawal</option>
+                                  <option value="fixed_expense_recurring">fixed_expense_recurring</option>
+                                  <option value="expense_on_dates">expense_on_dates</option>
+                                  <option value="staff_payroll">staff_payroll</option>
+                                  <option value="project_income_on_dates">project_income_on_dates</option>
+                                  <option value="project_income_recurring">project_income_recurring</option>
+                                </select>
+                                <input value={editName} onChange={(e) => setEditName(e.target.value)} placeholder="Item name" className="flex-1 bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                              </div>
+
+                              {editType === 'owners_capital_added' || editType === 'owners_capital_withdrawal' ? (
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Amount</label>
+                                    <input value={editAttrs.amount ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Date</label>
+                                    <input type="date" value={editAttrs.date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                </div>
+                              ) : editType === 'fixed_expense_recurring' || editType === 'project_income_recurring' ? (
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Amount</label>
+                                    <input value={editAttrs.amount ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, amount: e.target.value }))} placeholder="Amount" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Tax code</label>
+                                    <select value={editAttrs.taxcode ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                                      <option value="">Tax code</option>
+                                      <option value="gst">gst</option>
+                                      <option value="gstfree">gstfree</option>
+                                    </select>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Frequency</label>
+                                    <select value={editAttrs.frequency ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                                      <option value="">Frequency</option>
+                                      <option value="daily">daily</option>
+                                      <option value="weekly">weekly</option>
+                                      <option value="monthly">monthly</option>
+                                      <option value="yearly">yearly</option>
+                                    </select>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Interval</label>
+                                    <input type="number" value={editAttrs.interval ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, interval: Number(e.target.value) }))} placeholder="Interval" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Start date</label>
+                                    <input type="date" value={editAttrs.start_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">End date</label>
+                                    <input type="date" value={editAttrs.end_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                </div>
+                              ) : editType === 'expense_on_dates' || editType === 'project_income_on_dates' ? (
+                                <div className="space-y-3">
+                                  <div className="flex items-center justify-between">
+                                    <label className="text-xs text-gray-300">Date & Amount Entries</label>
+                                    <div className="flex gap-2">
+                                      {(editAttrs.dateAmountEntries || []).length > 0 && (
+                                        <button
+                                          type="button"
+                                          className="bg-gray-600 hover:bg-gray-500 text-white px-2 py-1 rounded text-xs"
+                                          onClick={() => setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: [] }))}
+                                        >
+                                          Clear All
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        className="bg-blue-600 hover:bg-blue-700 text-white px-2 py-1 rounded text-xs"
+                                        onClick={() => {
+                                          const currentEntries = editAttrs.dateAmountEntries || []
+                                          setEditAttrs((prev: any) => ({
+                                            ...prev,
+                                            dateAmountEntries: [...currentEntries, { date: '', amount: '' }]
+                                          }))
+                                        }}
+                                      >
+                                        Add Entry
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {(editAttrs.dateAmountEntries || []).length === 0 ? (
+                                    <div className="text-gray-500 text-sm italic text-center py-4 border border-gray-700 rounded border-dashed">
+                                      Click "Add Entry" to add date and amount pairs
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      {(editAttrs.dateAmountEntries || []).map((entry: any, index: number) => (
+                                        <div key={index} className="flex gap-2 items-center">
+                                          <div className="flex-1">
+                                            <input
+                                              type="date"
+                                              value={entry.date || ''}
+                                              onChange={(e) => {
+                                                const newEntries = [...(editAttrs.dateAmountEntries || [])]
+                                                newEntries[index] = { ...newEntries[index], date: e.target.value }
+                                                setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
+                                              }}
+                                              className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
+                                            />
+                                          </div>
+                                          <div className="flex-1">
+                                            <input
+                                              type="number"
+                                              step="0.01"
+                                              value={entry.amount || ''}
+                                              onChange={(e) => {
+                                                const newEntries = [...(editAttrs.dateAmountEntries || [])]
+                                                newEntries[index] = { ...newEntries[index], amount: e.target.value }
+                                                setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
+                                              }}
+                                              placeholder="Amount"
+                                              className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2"
+                                            />
+                                          </div>
+                                          <button
+                                            type="button"
+                                            className="text-red-400 hover:text-red-300 px-2 py-1"
+                                            onClick={() => {
+                                              const newEntries = (editAttrs.dateAmountEntries || []).filter((_: any, i: number) => i !== index)
+                                              setEditAttrs((prev: any) => ({ ...prev, dateAmountEntries: newEntries }))
+                                            }}
+                                          >
+                                            ✕
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Tax code</label>
+                                    <select value={editAttrs.taxcode ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, taxcode: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                                      <option value="">Tax code</option>
+                                      <option value="gst">gst</option>
+                                      <option value="gstfree">gstfree</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              ) : editType === 'staff_payroll' ? (
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Frequency</label>
+                                    <select value={editAttrs.frequency ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, frequency: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                                      <option value="">Frequency</option>
+                                      <option value="daily">daily</option>
+                                      <option value="weekly">weekly</option>
+                                      <option value="monthly">monthly</option>
+                                      <option value="yearly">yearly</option>
+                                    </select>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Start date</label>
+                                    <input type="date" value={editAttrs.start_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, start_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">End date</label>
+                                    <input type="date" value={editAttrs.end_date ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, end_date: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Hourly rate</label>
+                                    <input value={editAttrs.hourly_rate ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, hourly_rate: e.target.value }))} placeholder="Hourly rate" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Hours per pay period</label>
+                                    <input value={editAttrs.hours_per_pay_period ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, hours_per_pay_period: e.target.value }))} placeholder="Hours per pay period" className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2" />
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <label className="text-xs text-gray-300 mb-1">Leave entitlement</label>
+                                    <select value={editAttrs.leave_entitlement ?? ''} onChange={(e) => setEditAttrs((prev: any) => ({ ...prev, leave_entitlement: e.target.value }))} className="bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2">
+                                      <option value="">Leave entitlement</option>
+                                      <option value="yes">yes</option>
+                                      <option value="no">no</option>
+                                    </select>
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              <div className="flex gap-2">
+                                <button disabled={editSaving} className="bg-yellow-400 text-gray-900 px-3 py-2 rounded-md disabled:opacity-50" onClick={async () => {
+                                  const type = editType
+                                  const name = (editName || editType || '').trim()
+                                  if (!type) return setError('Select an item type')
+                                  if (!name) return setError('Enter item name')
+                                  setEditSaving(true)
+                                  let attributes: any = {}
+                                  const a = editAttrs || {}
+                                  try {
+                                    switch (type) {
+                                      case 'owners_capital_added':
+                                      case 'owners_capital_withdrawal':
+                                        attributes = { amount: a.amount ? Number(a.amount) : null, date: a.date || null }
+                                        break
+                                      case 'fixed_expense_recurring':
+                                      case 'project_income_recurring':
+                                        attributes = {
+                                          amount: a.amount ? Number(a.amount) : null,
+                                          taxcode: a.taxcode || null,
+                                          frequency: a.frequency || null,
+                                          interval: a.interval ?? null,
+                                          start_date: a.start_date || null,
+                                          end_date: a.end_date || null,
+                                        }
+                                        break
+                                      case 'expense_on_dates':
+                                      case 'project_income_on_dates':
+                                        // Convert user-friendly format to backend format
+                                        const editEntries = a.dateAmountEntries || []
+                                        const editDates = editEntries.map((entry: any) => entry.date).filter(Boolean)
+                                        const editAmounts = editEntries.map((entry: any) => Number(entry.amount || 0))
+                                        attributes = { dates: editDates, amount_array: editAmounts, taxcode: a.taxcode || null }
+                                        break
+                                      case 'staff_payroll':
+                                        attributes = {
+                                          frequency: a.frequency || null,
+                                          start_date: a.start_date || null,
+                                          end_date: a.end_date || null,
+                                          hourly_rate: a.hourly_rate ? Number(a.hourly_rate) : null,
+                                          hours_per_pay_period: a.hours_per_pay_period ? Number(a.hours_per_pay_period) : null,
+                                          leave_entitlement: a.leave_entitlement || null,
+                                        }
+                                        break
+                                      default:
+                                        attributes = { raw: a }
+                                    }
+                                  } catch (err: any) {
+                                    setEditSaving(false)
+                                    return setError(String(err?.message || err))
+                                  }
+
+                                  const { data, error: updErr } = await supabase.from('budget_details').update({
+                                    name,
+                                    item_type: type,
+                                    attributes,
+                                  }).eq('id', it.id).select('*').maybeSingle()
+                                  setEditSaving(false)
+                                  if (updErr) return setError(updErr.message)
+                                  if (data) setItems(prev => prev.map(p => String(p.id) === String(it.id) ? data : p))
+                                  setEditOpenId(null)
+                                  setEditType('')
+                                  setEditName('')
+                                  setEditAttrs({})
+                                }}>Save</button>
+                                <button className="bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 px-3 py-2 rounded-md" onClick={() => { setEditOpenId(null); setEditType(''); setEditName(''); setEditAttrs({}) }}>Cancel</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-gray-100">{it.name}</div>
+                                <div className="text-gray-400 text-xs">{it.item_type}</div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <button className="text-yellow-300 text-xs" onClick={() => {
+                                  setEditOpenId(String(it.id))
+                                  setEditType(it.item_type || '')
+                                  setEditName(it.name || '')
+                                  const a = it.attributes || {}
+                                  let norm = { ...a }
+                                  if (it.item_type === 'expense_on_dates' || it.item_type === 'project_income_on_dates') {
+                                    // Convert backend format to user-friendly format
+                                    const dates = Array.isArray(a.dates) ? a.dates : (a.dates || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+                                    const amounts = Array.isArray(a.amount_array) ? a.amount_array : (a.amount_array || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+                                    const dateAmountEntries = dates.map((date: string, index: number) => ({
+                                      date: date,
+                                      amount: amounts[index] || ''
+                                    }))
+                                    norm = {
+                                      ...norm,
+                                      dateAmountEntries,
+                                      // Keep original format for backwards compatibility
+                                      dates: Array.isArray(a.dates) ? a.dates.join(', ') : (a.dates || ''),
+                                      amount_array: Array.isArray(a.amount_array) ? a.amount_array.join(', ') : (a.amount_array || ''),
+                                    }
+                                  }
+                                  if (it.item_type === 'owners_capital_added' || it.item_type === 'owners_capital_withdrawal') {
+                                    norm = { ...norm, amount: a.amount ?? '' }
+                                  }
+                                  if (it.item_type === 'fixed_expense_recurring' || it.item_type === 'project_income_recurring') {
+                                    norm = { ...norm, amount: a.amount ?? '', interval: a.interval ?? '' }
+                                  }
+                                  if (it.item_type === 'staff_payroll') {
+                                    norm = {
+                                      ...norm,
+                                      hourly_rate: a.hourly_rate ?? '',
+                                      hours_per_pay_period: a.hours_per_pay_period ?? '',
+                                    }
+                                  }
+                                  setEditAttrs(norm)
+                                }}>Edit</button>
+                                <button className="text-red-400 text-xs" onClick={() => deleteItem(it.id)}>Delete</button>
+                              </div>
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               ) : (
                 <div className="mt-6 p-4 bg-gray-900/60 border border-gray-800 rounded-lg text-center">
                   <div className="text-gray-400 text-sm mb-2">Budget config required</div>
@@ -1171,7 +1193,7 @@ export default function BudgetDetailPage() {
                     setCfgLoading(true)
                     setCfgError(null)
                     try {
-                      const { data, error } = await supabase.from('budget_config' as any).insert({ 
+                      const { data, error } = await supabase.from('budget_config' as any).insert({
                         budget_id: id,
                         gst_frequency: null,
                         leave_entitlements_rate: null,
@@ -1270,7 +1292,7 @@ export default function BudgetDetailPage() {
                 {/* Account Codes Section */}
                 <div className="border-t border-gray-700 pt-3 mt-4">
                   <h4 className="text-xs text-gray-300 mb-3 font-medium">Account Codes</h4>
-                  
+
                   {/* Payroll Expense Account Code */}
                   <div className="grid grid-cols-3 gap-3 items-start mb-3">
                     <label className="text-xs text-gray-300 pt-2">Payroll Expense Account</label>
@@ -1380,16 +1402,15 @@ export default function BudgetDetailPage() {
                 <div className="flex gap-2">
                   <button
                     disabled={cfgSaving}
-                    className={`px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2 ${
-                      cfgSaving 
-                        ? 'bg-yellow-300 text-gray-800 cursor-not-allowed' 
-                        : cfgSaveSuccess 
-                          ? 'bg-green-500 text-white' 
-                          : 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
-                    }`}
+                    className={`px-3 py-2 rounded-md transition-all duration-200 flex items-center gap-2 ${cfgSaving
+                      ? 'bg-yellow-300 text-gray-800 cursor-not-allowed'
+                      : cfgSaveSuccess
+                        ? 'bg-green-500 text-white'
+                        : 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
+                      }`}
                     onClick={async () => {
                       if (!id || !cfgDraft || cfgSaving) return
-                      
+
                       // Validate all required fields
                       if (!cfgDraft.gst_frequency) return setCfgError('GST frequency is required')
                       if (cfgDraft.leave_entitlements_rate === null || cfgDraft.leave_entitlements_rate === undefined || cfgDraft.leave_entitlements_rate === '') return setCfgError('Leave entitlements rate is required')
@@ -1402,11 +1423,11 @@ export default function BudgetDetailPage() {
                       if (!cfgDraft.income_tax_payment_account_code) return setCfgError('Income tax payment account code is required')
                       if (!cfgDraft.workers_compensation_account_code) return setCfgError('Workers compensation account code is required')
                       if (!cfgDraft.payroll_tax_payment_account_code) return setCfgError('Payroll tax payment account code is required')
-                      
+
                       setCfgSaving(true)
                       setCfgError(null)
                       setCfgSaveSuccess(false)
-                      
+
                       // Only save the specific fields we need
                       const payload = {
                         gst_frequency: cfgDraft?.gst_frequency || null,
@@ -1446,12 +1467,12 @@ export default function BudgetDetailPage() {
                         }
                         upserted = data
                       }
-                      
+
                       setCfg(upserted)
                       setCfgDraft(upserted ? { ...upserted } : null)
                       setCfgSaving(false)
                       setCfgSaveSuccess(true)
-                      
+
                       // Show success state for 1.5 seconds, then close
                       setTimeout(() => {
                         setCfgSaveSuccess(false)
@@ -1496,34 +1517,193 @@ export default function BudgetDetailPage() {
 
 // Cash Flow Chart Component
 function CashFlowChart({ data, compact = false }: { data: any[], compact?: boolean }) {
-  // Process data to create daily cumulative totals
-  const processedData = data.reduce((acc: any, item: any) => {
-    const date = item.forecast_date
-    const amount = parseFloat(item.amount || 0)
-    
-    if (!acc[date]) {
-      acc[date] = 0
+  const chartRef = React.useRef<ChartJS>(null)
+  const [zoomReady, setZoomReady] = React.useState(false)
+  const [selectedPeriod, setSelectedPeriod] = React.useState<{
+    date: string;
+    transactions: any[];
+    position: { x: number; y: number };
+  } | null>(null)
+  const [groupBy, setGroupBy] = React.useState<'daily' | 'weekly' | 'monthly'>('daily')
+  const containerRef = React.useRef<HTMLDivElement>(null)
+
+  // Load zoom plugin only on client
+  React.useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      if (typeof window === 'undefined') return
+      if (!zoomPluginRegistered) {
+        try {
+          const mod = await import('chartjs-plugin-zoom')
+          // Register only once
+          // @ts-ignore - type of module default
+          ChartJS.register(mod.default || mod)
+          zoomPluginRegistered = true
+        } catch (e) {
+          console.error('Failed to load zoom plugin', e)
+        }
+      }
+      if (!cancelled) setZoomReady(true)
     }
-    acc[date] += amount
-    
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  // Local date helpers to avoid timezone drift when parsing YYYY-MM-DD
+  const parseLocalDate = (s: string) => {
+    const m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})/.exec(s)
+    if (m) {
+      const y = parseInt(m[1], 10)
+      const mo = parseInt(m[2], 10) - 1
+      const d = parseInt(m[3], 10)
+      return new Date(y, mo, d)
+    }
+    // Fallback if not a simple date string
+    const dt = new Date(s)
+    return new Date(dt.getFullYear(), dt.getMonth(), dt.getDate())
+  }
+
+  const formatDateKeyLocal = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+  // Helper function to get period key based on grouping (local time, Monday-start weeks)
+  const getPeriodKey = (dateStr: string, grouping: string) => {
+    const date = parseLocalDate(dateStr)
+
+    switch (grouping) {
+      case 'weekly': {
+        // Move back to Monday in local time (Mon=1 .. Sun=0)
+        const dow = date.getDay() // 0=Sun,1=Mon,...
+        const daysToSubtract = dow === 0 ? 6 : dow - 1
+        const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() - daysToSubtract)
+        return formatDateKeyLocal(monday)
+      }
+      case 'monthly': {
+        return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-01`
+      }
+      default: {
+        // daily
+        return formatDateKeyLocal(date)
+      }
+    }
+  }
+
+  // Helper function to format period labels (use local parsed date to avoid TZ drift)
+  const formatPeriodLabel = (periodKey: string, grouping: string) => {
+    const date = parseLocalDate(periodKey)
+    switch (grouping) {
+      case 'weekly':
+        const endDate = new Date(date)
+        endDate.setDate(date.getDate() + 6)
+        return `${date.toLocaleDateString('en-AU', { month: 'short', day: 'numeric' })} - ${endDate.toLocaleDateString('en-AU', { month: 'short', day: 'numeric' })}`
+      case 'monthly':
+        return date.toLocaleDateString('en-AU', { month: 'short', year: 'numeric' })
+      default: // daily
+        return date.toLocaleDateString('en-AU', { month: 'short', day: 'numeric' })
+    }
+  }
+
+  // Process data to create daily cumulative totals with grouping
+  const processedData = data.reduce((acc: any, item: any) => {
+    // Use full timestamp and parse to local day to avoid UTC day drift
+    const periodKey = getPeriodKey(String(item.forecast_date || ''), groupBy)
+    const amount = parseFloat(item.amount || 0)
+
+    if (!acc[periodKey]) {
+      acc[periodKey] = {
+        total: 0,
+        transactions: []
+      }
+    }
+    acc[periodKey].total += amount
+    acc[periodKey].transactions.push(item)
+
     return acc
   }, {})
 
   // Sort dates and create cumulative running total
   const sortedDates = Object.keys(processedData).sort()
   let runningTotal = 0
-  const chartData = sortedDates.map(date => {
-    runningTotal += processedData[date]
+  const chartData = sortedDates.map(periodKey => {
+    const periodTotal = processedData[periodKey].total
+    runningTotal += periodTotal
     return {
-      date,
-      dailyTotal: processedData[date],
-      cumulativeTotal: runningTotal
+      date: periodKey,
+      dailyTotal: periodTotal,
+      cumulativeTotal: runningTotal,
+      transactions: processedData[periodKey].transactions
     }
   })
+
+  const resetZoom = () => {
+    // Guard if plugin not loaded
+    // @ts-ignore - resetZoom added by plugin
+    if (chartRef.current && typeof (chartRef.current as any).resetZoom === 'function') {
+      // @ts-ignore
+      (chartRef.current as any).resetZoom()
+    }
+  }
+
+  const handleChartClick = (event: any, elements: any[]) => {
+    if (elements.length > 0) {
+      const elementIndex = elements[0].index
+      const clickedPeriod = sortedDates[elementIndex]
+      const periodData = chartData[elementIndex]
+      const transactionsForPeriod = periodData.transactions
+
+      // Get click position relative to the chart container
+      const rect = event.native.target.getBoundingClientRect()
+      const containerRect = containerRef.current?.getBoundingClientRect()
+
+      if (containerRect) {
+        setSelectedPeriod({
+          date: clickedPeriod,
+          transactions: transactionsForPeriod,
+          position: {
+            x: rect.left - containerRect.left + (rect.width / 2),
+            y: rect.top - containerRect.top
+          }
+        })
+      }
+    }
+  }
+
+  // Handle clicks outside the tooltip
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!selectedPeriod) return
+
+      const target = event.target as Element
+      const tooltipElement = document.querySelector('[data-tooltip="transaction-details"]')
+
+      // If click is not within the tooltip, close it
+      if (tooltipElement && !tooltipElement.contains(target)) {
+        setSelectedPeriod(null)
+      }
+    }
+
+    if (selectedPeriod) {
+      // Add a small delay to prevent immediate closure from the same click that opened it
+      const timeoutId = setTimeout(() => {
+        document.addEventListener('click', handleClickOutside, true)
+      }, 50)
+
+      return () => {
+        clearTimeout(timeoutId)
+        document.removeEventListener('click', handleClickOutside, true)
+      }
+    }
+  }, [selectedPeriod])
 
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    onClick: handleChartClick,
+    onHover: (event: any, activeElements: any[]) => {
+      if (event.native) {
+        event.native.target.style.cursor = activeElements.length > 0 ? 'pointer' : 'default'
+      }
+    },
     plugins: {
       legend: {
         position: 'top' as const,
@@ -1540,7 +1720,7 @@ function CashFlowChart({ data, compact = false }: { data: any[], compact?: boole
         mode: 'index' as const,
         intersect: false,
         callbacks: {
-          label: function(context: any) {
+          label: function (context: any) {
             let label = context.dataset.label || ''
             if (label) {
               label += ': '
@@ -1550,9 +1730,25 @@ function CashFlowChart({ data, compact = false }: { data: any[], compact?: boole
               currency: 'AUD'
             }).format(context.parsed.y)
             return label
+          },
+          afterBody: function () {
+            return 'Click to view transaction details'
           }
         }
-      }
+      },
+      ...(zoomReady ? {
+        zoom: {
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: 'xy' as const,
+          },
+          pan: {
+            enabled: true,
+            mode: 'xy' as const,
+          }
+        }
+      } : {})
     },
     scales: {
       x: {
@@ -1579,7 +1775,7 @@ function CashFlowChart({ data, compact = false }: { data: any[], compact?: boole
         },
         ticks: {
           color: '#9ca3af', // gray-400
-          callback: function(value: any) {
+          callback: function (value: any) {
             return new Intl.NumberFormat('en-AU', {
               style: 'currency',
               currency: 'AUD',
@@ -1595,20 +1791,34 @@ function CashFlowChart({ data, compact = false }: { data: any[], compact?: boole
     }
   }
 
+  // Overall totals (Income, Expenses, Profit)
+  const totals = React.useMemo(() => {
+    let income = 0
+    let expense = 0 // negative amounts accumulated as negative, convert to abs for display
+    for (const item of data || []) {
+      const amt = parseFloat(item.amount || 0)
+      if (!Number.isFinite(amt)) continue
+      if (amt >= 0) income += amt
+      else expense += amt
+    }
+    return {
+      income,
+      expenseAbs: Math.abs(expense),
+      profit: income + expense,
+    }
+  }, [data])
+
   const chartDataConfig = {
-    labels: chartData.map(item => new Date(item.date).toLocaleDateString('en-AU', { 
-      month: 'short', 
-      day: 'numeric' 
-    })),
+    labels: chartData.map(item => formatPeriodLabel(item.date, groupBy)),
     datasets: [
       {
         type: 'bar' as const,
-        label: 'Daily Cash Flow',
+        label: `${groupBy.charAt(0).toUpperCase() + groupBy.slice(1)} Cash Flow`,
         data: chartData.map(item => item.dailyTotal),
-        backgroundColor: chartData.map(item => 
+        backgroundColor: chartData.map(item =>
           item.dailyTotal >= 0 ? 'rgba(34, 197, 94, 0.6)' : 'rgba(239, 68, 68, 0.6)'
         ),
-        borderColor: chartData.map(item => 
+        borderColor: chartData.map(item =>
           item.dailyTotal >= 0 ? 'rgba(34, 197, 94, 1)' : 'rgba(239, 68, 68, 1)'
         ),
         borderWidth: 1,
@@ -1631,22 +1841,204 @@ function CashFlowChart({ data, compact = false }: { data: any[], compact?: boole
   }
 
   return (
-    <div className="space-y-4 h-full flex flex-col">
-      <div className="flex-1 relative w-full">
-        <Chart type="bar" data={chartDataConfig} options={chartOptions} />
+    <div ref={containerRef} className="space-y-4 h-full flex flex-col w-full relative">
+      {/* Chart Controls - only show in fullscreen mode */}
+      {!compact && (
+        <div className="flex justify-between items-center mb-2">
+          {/* Grouping Controls */}
+          <div className="flex items-center gap-4">
+            <span className="text-gray-300 text-sm">Group by:</span>
+            <div className="flex gap-3">
+              {['daily', 'weekly', 'monthly'].map((option) => (
+                <label key={option} className="flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="groupBy"
+                    value={option}
+                    checked={groupBy === option}
+                    onChange={(e) => setGroupBy(e.target.value as 'daily' | 'weekly' | 'monthly')}
+                    className="text-blue-500 focus:ring-blue-500"
+                  />
+                  <span className="text-gray-300 text-sm capitalize">{option}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Reset Button */}
+          <button
+            onClick={resetZoom}
+            className="bg-gray-700 hover:bg-gray-600 text-gray-200 px-3 py-1 rounded text-xs transition-colors"
+            title="Reset zoom and pan"
+          >
+            🔍 Reset View
+          </button>
+        </div>
+      )}
+
+      <div
+        className="flex-1 relative w-full min-w-0"
+        onClick={(e) => {
+          // Close tooltip if clicking on the chart container but not on the chart itself
+          if (selectedPeriod && e.target === e.currentTarget) {
+            setSelectedPeriod(null)
+          }
+        }}
+      >
+        {zoomReady ? (
+          <Chart ref={chartRef} type="bar" data={chartDataConfig} options={chartOptions} />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm">Loading chart…</div>
+        )}
+
+        {/* Transaction Details Tooltip */}
+        {selectedPeriod && (
+          <div
+            data-tooltip="transaction-details"
+            className="absolute z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-w-md max-h-96 overflow-y-auto"
+            style={{
+              left: selectedPeriod.position.x - 150, // Center the tooltip
+              top: selectedPeriod.position.y - 10,
+              transform: selectedPeriod.position.y < 200 ? 'translateY(20px)' : 'translateY(-100%)'
+            }}
+          >
+            <div className="p-3 border-b border-gray-700">
+              <div className="flex justify-between items-start">
+                <div>
+                  <h4 className="text-sm font-medium text-gray-100">
+                    {groupBy === 'daily'
+                      ? parseLocalDate(selectedPeriod.date).toLocaleDateString('en-AU', {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric'
+                      })
+                      : groupBy === 'weekly'
+                        ? (() => {
+                          const startDate = parseLocalDate(selectedPeriod.date)
+                          const endDate = new Date(startDate)
+                          endDate.setDate(startDate.getDate() + 6)
+                          return `Week: ${startDate.toLocaleDateString('en-AU', {
+                            month: 'short',
+                            day: 'numeric'
+                          })} - ${endDate.toLocaleDateString('en-AU', {
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric'
+                          })}`
+                        })()
+                        : `${parseLocalDate(selectedPeriod.date).toLocaleDateString('en-AU', {
+                          month: 'long',
+                          year: 'numeric'
+                        })}`
+                    }
+                  </h4>
+                  <div className="text-xs text-gray-400">
+                    {selectedPeriod.transactions.length} transaction{selectedPeriod.transactions.length !== 1 ? 's' : ''}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setSelectedPeriod(null)}
+                  className="text-gray-400 hover:text-gray-300 text-sm ml-2"
+                  title="Close"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="p-3 space-y-2 max-h-64 overflow-y-auto">
+              {selectedPeriod.transactions.length === 0 ? (
+                <div className="text-center text-gray-400 text-xs py-2">
+                  No transactions for this period
+                </div>
+              ) : (
+                selectedPeriod.transactions.map((transaction: any, index: number) => (
+                  <div key={index} className="bg-gray-800 border border-gray-700 rounded p-2">
+                    <div className="flex justify-between items-start gap-2">
+                      <div className="flex-1">
+                        <div className="text-xs text-gray-300 font-medium truncate">
+                          {transaction.name || 'Unknown Item'}
+                        </div>
+                        <div className="text-xs text-gray-400 truncate">
+                          {transaction.item_type || 'Unknown Type'}
+                        </div>
+                      </div>
+                      <div className={`text-xs font-medium ${parseFloat(transaction.amount || 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                        {new Intl.NumberFormat('en-AU', {
+                          style: 'currency',
+                          currency: 'AUD',
+                          minimumFractionDigits: 0
+                        }).format(parseFloat(transaction.amount || 0))}
+                      </div>
+                    </div>
+                    {transaction.forecast_date && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        {new Date(transaction.forecast_date).toLocaleDateString('en-AU')}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+            {selectedPeriod.transactions.length > 0 && (
+              <div className="p-3 border-t border-gray-700 bg-gray-800">
+                <div className="flex justify-between text-xs">
+                  <span className="text-gray-400">Total:</span>
+                  <span className={`font-medium ${selectedPeriod.transactions.reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                    {new Intl.NumberFormat('en-AU', {
+                      style: 'currency',
+                      currency: 'AUD',
+                      minimumFractionDigits: 0
+                    }).format(selectedPeriod.transactions.reduce((sum: number, t: any) => sum + parseFloat(t.amount || 0), 0))}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      
+
+      {/* Item Type Breakdown - fullscreen only */}
+      {!compact && (
+        <div className="mt-4 w-full">
+          <div className="flex items-baseline justify-between mb-2">
+            <h4 className="text-sm text-gray-300 font-medium">Item Type Breakdown</h4>
+            <span className="text-xs text-gray-500">Values by absolute amount</span>
+          </div>
+          {/* KPIs */}
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="bg-gray-900/60 border border-gray-800 rounded p-3">
+              <div className="text-xs text-gray-400">Income</div>
+              <div className="text-green-400 font-medium">
+                {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0 }).format(totals.income)}
+              </div>
+            </div>
+            <div className="bg-gray-900/60 border border-gray-800 rounded p-3">
+              <div className="text-xs text-gray-400">Expenses</div>
+              <div className="text-red-400 font-medium">
+                {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0 }).format(totals.expenseAbs)}
+              </div>
+            </div>
+            <div className="bg-gray-900/60 border border-gray-800 rounded p-3">
+              <div className="text-xs text-gray-400">Profit</div>
+              <div className={`font-medium ${totals.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', minimumFractionDigits: 0 }).format(totals.profit)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Cumulative Cash Flow Summary - only show in fullscreen mode */}
       {!compact && (
-        <div className="max-h-60 overflow-y-auto">
-          <h5 className="text-xs text-gray-400 mb-2">Daily Cash Flow Summary</h5>
+        <div className="max-h-60 overflow-y-auto w-full">
+          <h5 className="text-xs text-gray-400 mb-2">{groupBy.charAt(0).toUpperCase() + groupBy.slice(1)} Cash Flow Summary</h5>
           <div className="grid grid-cols-3 gap-2 text-xs">
-            <div className="text-gray-400 font-medium">Date</div>
-            <div className="text-gray-400 font-medium">Daily Amount</div>
+            <div className="text-gray-400 font-medium">Period</div>
+            <div className="text-gray-400 font-medium">{groupBy.charAt(0).toUpperCase() + groupBy.slice(1)} Amount</div>
             <div className="text-gray-400 font-medium">Running Total</div>
             {chartData.map((item, index) => (
               <React.Fragment key={index}>
-                <div className="text-gray-300">{new Date(item.date).toLocaleDateString('en-AU')}</div>
+                <div className="text-gray-300">{formatPeriodLabel(item.date, groupBy)}</div>
                 <div className={`${item.dailyTotal >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                   {new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD' }).format(item.dailyTotal)}
                 </div>
