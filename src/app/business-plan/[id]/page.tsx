@@ -33,6 +33,7 @@ export default function BusinessPlanDetailPage() {
 
 
   const [keyMetrics, setKeyMetrics] = useState('')
+  const [identifiedOperationalChallenges, setIdentifiedOperationalChallenges] = useState('')
   const [risksAndPlanB, setRisksAndPlanB] = useState('')
   const [vision35Years, setVision35Years] = useState('')
 
@@ -75,6 +76,7 @@ export default function BusinessPlanDetailPage() {
 
 
         setKeyMetrics(data?.key_metrics ?? '')
+        setIdentifiedOperationalChallenges(data?.identified_operational_challenges ?? '')
         setRisksAndPlanB(data?.risks_and_plan_b ?? '')
         setVision35Years(data?.vision_3_5_years ?? '')
         setCanvas((data as any)?.canvas ?? null)
@@ -114,6 +116,7 @@ export default function BusinessPlanDetailPage() {
       .update({
         name: name || null,
         problem: problem || null,
+        identified_operational_challenges: identifiedOperationalChallenges || null,
 
         unique_selling_point: uniqueSellingPoint || null,
         target_market: targetMarket || null,
@@ -278,6 +281,16 @@ export default function BusinessPlanDetailPage() {
                     value={keyMetrics}
                     onChange={(e) => setKeyMetrics(e.target.value)}
                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[80px]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-gray-300 mb-1">Identified Operational Challenges</label>
+                  <textarea
+                    value={identifiedOperationalChallenges}
+                    onChange={(e) => setIdentifiedOperationalChallenges(e.target.value)}
+                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
+                    placeholder="What operational challenges have we identified?"
                   />
                 </div>
 

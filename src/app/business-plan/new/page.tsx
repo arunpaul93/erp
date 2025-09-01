@@ -22,6 +22,7 @@ export default function NewBusinessPlanPage() {
 
 
     const [keyMetrics, setKeyMetrics] = useState('')
+    const [identifiedOperationalChallenges, setIdentifiedOperationalChallenges] = useState('')
     const [risksAndPlanB, setRisksAndPlanB] = useState('')
     const [vision35Years, setVision35Years] = useState('')
 
@@ -56,6 +57,7 @@ export default function NewBusinessPlanPage() {
                 organisation_id: selectedOrgId,
                 name: name.trim() || 'Untitled Business Plan',
                 problem: problem || null,
+                identified_operational_challenges: identifiedOperationalChallenges || null,
                 unique_selling_point: uniqueSellingPoint || null,
                 target_market: targetMarket || null,
                 operational_workflow: operationalWorkflow ? operationalWorkflow : null,
@@ -94,6 +96,7 @@ export default function NewBusinessPlanPage() {
             organisation_id: selectedOrgId,
             name: name || null,
             problem: problem || null,
+            identified_operational_challenges: identifiedOperationalChallenges || null,
 
             unique_selling_point: uniqueSellingPoint || null,
             target_market: targetMarket || null,
@@ -244,6 +247,16 @@ export default function NewBusinessPlanPage() {
                                     onChange={e => setKeyMetrics(e.target.value)}
                                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[80px]"
                                     placeholder="What will we measure?"
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm text-gray-300 mb-1">Identified Operational Challenges</label>
+                                <textarea
+                                    value={identifiedOperationalChallenges}
+                                    onChange={e => setIdentifiedOperationalChallenges(e.target.value)}
+                                    className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[120px]"
+                                    placeholder="What operational challenges have we identified?"
                                 />
                             </div>
 
