@@ -82,30 +82,41 @@ export default function HomePage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {cards.map((c) => (
-              <div
-                key={c.title}
-                className="group rounded-xl border border-gray-800 bg-gray-900/80 backdrop-blur-sm p-5 hover:border-yellow-400 transition-colors"
-              >
-                <div className="flex items-center gap-3 mb-3">
-                  <span className="inline-flex items-center justify-center w-9 h-9 rounded-md bg-yellow-500/10 text-yellow-400">
-                    ⚡
-                  </span>
-                  <h3 className="text-lg font-semibold text-gray-100">{c.title}</h3>
-                </div>
-                <p className="text-sm text-gray-400">{c.desc}</p>
-                <button
-                  onClick={() => (c as any).path && router.push((c as any).path)}
-                  className="mt-4 inline-flex items-center gap-2 text-yellow-400 text-sm hover:text-yellow-300 disabled:opacity-50"
-                  disabled={!(c as any).path}
+            {cards.map((c) => {
+              const path = (c as any).path
+              const clickable = Boolean(path)
+              return (
+                <div
+                  key={c.title}
+                  role={clickable ? 'button' : undefined}
+                  tabIndex={clickable ? 0 : undefined}
+                  onClick={() => clickable && router.push(path)}
+                  onKeyDown={(e) => clickable && (e.key === 'Enter' || e.key === ' ') && router.push(path)}
+                  className={`group rounded-xl border border-gray-800 bg-gray-900/80 backdrop-blur-sm p-5 hover:border-yellow-400 transition-colors ${clickable ? 'cursor-pointer focus:outline-none focus:ring-2 focus:ring-yellow-400' : ''}`}
                 >
-                  Open
-                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="inline-flex items-center justify-center w-9 h-9 rounded-md bg-yellow-500/10 text-yellow-400">
+                      ⚡
+                    </span>
+                    <h3 className="text-lg font-semibold text-gray-100">{c.title}</h3>
+                  </div>
+                  <p className="text-sm text-gray-400">{c.desc}</p>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      clickable && router.push(path)
+                    }}
+                    aria-label={clickable ? `Open ${c.title}` : `${c.title} not available`}
+                    className="mt-4 inline-flex items-center justify-center text-yellow-400 text-sm hover:text-yellow-300 disabled:opacity-50 w-8 h-8 rounded-full"
+                    disabled={!clickable}
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                </div>
+              )
+            })}
           </div>
         </div>
       </main>
