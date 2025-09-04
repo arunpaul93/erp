@@ -12,7 +12,7 @@ export default function HomePage() {
   const cards = [
     { title: 'Business Plan', desc: 'Strategic goals and initiatives.', path: '/business-plan' },
     { title: 'Permissions', desc: 'Manage user roles and permissions.', path: '/permissions' },
-  { title: 'Employees', desc: 'Manage employees and assignments.', path: '/employee_organisation' },
+    { title: 'Employees', desc: 'Manage employees and assignments.', path: '/employee_organisation' },
     { title: 'Sales', desc: 'Track orders, invoices, and revenue.' },
     { title: 'Inventory', desc: 'Manage stock levels and products.' },
     { title: 'Purchases', desc: 'Vendors, POs, and bills.' },
