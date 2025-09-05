@@ -120,7 +120,7 @@ export default function EmployeeShiftTemplatesPage() {
       let q = supabase.schema('salon').from('employee_shift_template').select('*').order('created_at', { ascending: false })
       let { data, error } = await q
       if (error && String(error.message).includes('permission denied')) {
-        ;({ data, error } = await supabase.from('employee_shift_template').select('*').order('created_at', { ascending: false }))
+        ; ({ data, error } = await supabase.from('employee_shift_template').select('*').order('created_at', { ascending: false }))
       }
       if (error) throw error
       setTemplates((data || []) as any)
@@ -228,12 +228,12 @@ export default function EmployeeShiftTemplatesPage() {
       branch_id: (t.branch_id || '') as any,
       attributes: structuredClone(t.attributes),
     })
-  setShowModal(true)
+    setShowModal(true)
   }
 
   const resetForm = () => {
     setEditingId(null)
-  setForm({ employee_organisation_id: '', branch_id: '', attributes: newAttributes() })
+    setForm({ employee_organisation_id: '', branch_id: '', attributes: newAttributes() })
   }
 
   const save = async () => {
