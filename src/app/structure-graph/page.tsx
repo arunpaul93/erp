@@ -241,6 +241,11 @@ export default function StructureGraphPage() {
         }
     }, [selectedOrgId])
 
+    // Log selectedOrgId changes for debugging
+    useEffect(() => {
+        console.log('StructureGraph: selectedOrgId changed to:', selectedOrgId)
+    }, [selectedOrgId])
+
     // D3 Force Simulation
     useEffect(() => {
         if (!graphData.nodes.length || !svgRef.current) return

@@ -23,31 +23,66 @@ export const useOrg = () => {
 }
 
 export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const [orgs, setOrgs] = useState<Org[]>([])
   const [selectedOrgId, setSelectedOrgIdState] = useState<string | null>(() => {
     try {
-      return typeof window !== 'undefined' ? localStorage.getItem('selectedOrgId') : null
-    } catch {
+      if (typeof window !== 'undefined') {
+        // Try both sessionStorage and localStorage
+        const sessionStored = sessionStorage.getItem('selectedOrgId')
+        const localStored = localStorage.getItem('selectedOrgId')
+        
+        console.log('OrgContext: Initial state loading - session:', sessionStored, 'local:', localStored)
+        
+        // Prefer sessionStorage (survives refresh) over localStorage
+        const stored = sessionStored || localStored
+        
+        // Also save to both storages to ensure persistence
+        if (stored) {
+          sessionStorage.setItem('selectedOrgId', stored)
+          localStorage.setItem('selectedOrgId', stored)
+        }
+        
+        return stored
+      }
+      return null
+    } catch (error) {
+      console.error('OrgContext: Failed to load from storage:', error)
       return null
     }
   })
   const [loading, setLoading] = useState(false)
 
   const setSelectedOrgId = (id: string | null) => {
+    console.log('OrgContext: setSelectedOrgId called with:', id, 'previous:', selectedOrgId)
     setSelectedOrgIdState(id)
     try {
       if (typeof window !== 'undefined') {
-        if (id) localStorage.setItem('selectedOrgId', id)
-        else localStorage.removeItem('selectedOrgId')
+        if (id) {
+          // Save to BOTH sessionStorage and localStorage for maximum persistence
+          sessionStorage.setItem('selectedOrgId', id)
+          localStorage.setItem('selectedOrgId', id)
+          console.log('OrgContext: saved to both storages:', id)
+        } else {
+          sessionStorage.removeItem('selectedOrgId')
+          localStorage.removeItem('selectedOrgId')
+          console.log('OrgContext: removed from both storages')
+        }
       }
-    } catch { }
+    } catch (error) {
+      console.error('OrgContext: storage error:', error)
+    }
   }
 
   const refresh = async () => {
+    // Don't fetch until auth has resolved
+    if (authLoading) {
+      console.log('OrgContext.refresh: auth still loading; skipping')
+      return
+    }
     if (!user) {
       setOrgs([])
-      setSelectedOrgId(null)
+      // Keep selectedOrgId - user might just be loading
       return
     }
 
@@ -57,7 +92,6 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
       if (!user.email) {
         console.warn('Auth user missing email; cannot resolve public user.')
         setOrgs([])
-        setSelectedOrgId(null)
         setLoading(false)
         return
       }
@@ -70,7 +104,6 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
       if (userError || !appUser) {
         console.error('Error fetching public user:', userError)
         setOrgs([])
-        setSelectedOrgId(null)
         setLoading(false)
         return
       }
@@ -166,27 +199,57 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
 
       setOrgs(finalOrgs)
 
-      // ensure selectedOrgId is still valid
-      if (finalOrgs.length > 0) {
-        const exists = finalOrgs.some((org: Org) => org.id === selectedOrgId)
-        if (!exists) setSelectedOrgId(finalOrgs[0].id)
-      } else {
-        setSelectedOrgId(null)
+      // Simple rule: Only auto-select if no org is currently selected
+      if (!selectedOrgId && finalOrgs.length > 0) {
+        console.log('OrgContext: no org selected, choosing first available:', finalOrgs[0].id)
+        setSelectedOrgId(finalOrgs[0].id)
       }
+      
+      // Otherwise: NEVER change the user's selection automatically
+      console.log('OrgContext: keeping existing selection:', selectedOrgId)
     } catch (err) {
       console.error(err)
       setOrgs([])
-      setSelectedOrgId(null)
+      // Keep selectedOrgId even on errors
     } finally {
       setLoading(false)
     }
   }
 
   useEffect(() => {
-    // refresh when user changes
-    refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user])
+    // Wait until auth resolves to avoid clearing selection on page refresh
+    if (authLoading) return
+
+    if (user?.id) {
+      // User is logged in - refresh their orgs
+      console.log('OrgContext: user logged in, refreshing orgs for:', user.email)
+      refresh()
+    } else if (user === null) {
+      // User explicitly logged out - clear everything
+      console.log('OrgContext: user logged out, clearing state')
+      setOrgs([])
+      setSelectedOrgId(null)
+    }
+    // If user is undefined, do nothing (still loading)
+  }, [user?.id, authLoading])
+
+  // Extra persistence: save to storage before page unload
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (selectedOrgId && typeof window !== 'undefined') {
+        try {
+          sessionStorage.setItem('selectedOrgId', selectedOrgId)
+          localStorage.setItem('selectedOrgId', selectedOrgId)
+          console.log('OrgContext: saved on beforeunload:', selectedOrgId)
+        } catch (error) {
+          console.error('OrgContext: beforeunload save error:', error)
+        }
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [selectedOrgId])
 
   return (
     <OrgContext.Provider value={{ orgs, selectedOrgId, setSelectedOrgId, loading, refresh }}>
