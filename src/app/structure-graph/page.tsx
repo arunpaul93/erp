@@ -250,6 +250,9 @@ export default function StructureGraphPage() {
 
         const { width, height } = dimensions
 
+        // Create container for zoomable content first
+        const container = svg.append('g').attr('class', 'zoom-container')
+
         // Create zoom behavior
         const zoom = d3Zoom<SVGSVGElement, unknown>()
             .scaleExtent([0.1, 4])
@@ -262,10 +265,10 @@ export default function StructureGraphPage() {
         if (currentTransformRef.current && zoomRef.current) {
             svg.call(zoom.transform, currentTransformRef.current)
         }
-        
+
         zoomRef.current = zoom
         svg.call(zoom)
-        
+
         // Clicking on empty background clears selected links
         svg.on('click', null)
         svg.on('click', (event) => {
@@ -274,9 +277,6 @@ export default function StructureGraphPage() {
                 setSelectedLinkIds(new Set())
             }
         })
-
-        // Create container for zoomable content
-        const container = svg.append('g').attr('class', 'zoom-container')
 
         // Filter nodes and links based on visibility state
         const nodeVisible = (nodeId: string) => {
@@ -391,26 +391,26 @@ export default function StructureGraphPage() {
             .attr('class', 'node')
             .style('cursor', 'pointer')
             .style('display', (d: GraphNode) => visibleNodeTypes.has(d.type) ? null : 'none') // Set initial visibility
-        
+
         // Cache node selection for incremental updates
         nodeSelRef.current = node as unknown as Selection<SVGGElement, GraphNode, SVGGElement, unknown>
-        
+
         node.call(d3Drag<SVGGElement, GraphNode>()
-                .on('start', (event, d) => {
-                    if (!event.active) simulation.alphaTarget(0.3).restart()
-                    d.fx = d.x
-                    d.fy = d.y
-                })
-                .on('drag', (event, d) => {
-                    d.fx = event.x
-                    d.fy = event.y
-                })
-                .on('end', (event, d) => {
-                    if (!event.active) simulation.alphaTarget(0)
-                    d.fx = null
-                    d.fy = null
-                })
-            )
+            .on('start', (event, d) => {
+                if (!event.active) simulation.alphaTarget(0.3).restart()
+                d.fx = d.x
+                d.fy = d.y
+            })
+            .on('drag', (event, d) => {
+                d.fx = event.x
+                d.fy = event.y
+            })
+            .on('end', (event, d) => {
+                if (!event.active) simulation.alphaTarget(0)
+                d.fx = null
+                d.fy = null
+            })
+        )
 
         // Add circles to nodes
         node.append('circle')
@@ -494,7 +494,7 @@ export default function StructureGraphPage() {
     // Separate effect to update visibility without recreating the entire graph
     useEffect(() => {
         if (!linkSelRef.current || !linkLabelSelRef.current || !nodeSelRef.current || !simulationRef.current) return
-        
+
         // Filter nodes and links based on visibility state
         const nodeVisible = (nodeId: string) => {
             const n = nodeById.get(nodeId)
@@ -510,12 +510,12 @@ export default function StructureGraphPage() {
         // Update link visibility based on filtered data
         const filteredLinkIds = new Set(filteredLinks.map(l => l.data.id))
         linkSelRef.current
-            .style('display', function(d: any) { 
+            .style('display', function (d: any) {
                 const link = d as GraphLink
                 return filteredLinkIds.has(link.data.id) ? null : 'none'
             })
         linkLabelSelRef.current
-            .style('display', function(d: any) { 
+            .style('display', function (d: any) {
                 const link = d as GraphLink
                 return filteredLinkIds.has(link.data.id) ? null : 'none'
             })
@@ -528,9 +528,9 @@ export default function StructureGraphPage() {
             visibleNodeIds: Array.from(visibleNodeIds),
             nodeSelectionSize: nodeSelRef.current.size()
         })
-        
+
         nodeSelRef.current
-            .style('display', function(d: any) { 
+            .style('display', function (d: any) {
                 const node = d as GraphNode
                 const isVisible = visibleNodeTypes.has(node.type)
                 return isVisible ? null : 'none'
@@ -546,8 +546,8 @@ export default function StructureGraphPage() {
         )
         simulation.alpha(0.3).restart()
 
-        console.log('Node toggle update complete:', { 
-            visibleNodes: visibleNodes.length, 
+        console.log('Node toggle update complete:', {
+            visibleNodes: visibleNodes.length,
             visibleLinks: filteredLinks.length,
             visibleNodeTypes: Array.from(visibleNodeTypes)
         })
