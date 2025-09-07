@@ -25,32 +25,23 @@ export const useOrg = () => {
 export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
   const { user, loading: authLoading } = useAuth()
   const [orgs, setOrgs] = useState<Org[]>([])
-  const [selectedOrgId, setSelectedOrgIdState] = useState<string | null>(() => {
-    try {
-      if (typeof window !== 'undefined') {
-        // Try both sessionStorage and localStorage
-        const sessionStored = sessionStorage.getItem('selectedOrgId')
-        const localStored = localStorage.getItem('selectedOrgId')
-        
-        console.log('OrgContext: Initial state loading - session:', sessionStored, 'local:', localStored)
-        
-        // Prefer sessionStorage (survives refresh) over localStorage
-        const stored = sessionStored || localStored
-        
-        // Also save to both storages to ensure persistence
-        if (stored) {
-          sessionStorage.setItem('selectedOrgId', stored)
-          localStorage.setItem('selectedOrgId', stored)
-        }
-        
-        return stored
-      }
-      return null
-    } catch (error) {
-      console.error('OrgContext: Failed to load from storage:', error)
-      return null
-    }
-  })
+  // Cookie helpers (client-only)
+  const getCookie = (name: string): string | null => {
+    if (typeof document === 'undefined') return null
+    const match = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/([.$?*|{}()\[\]\\\/\+^])/g, '\\$1') + '=([^;]*)'))
+    return match ? decodeURIComponent(match[1]) : null
+  }
+  const setCookie = (name: string, value: string, days = 365) => {
+    if (typeof document === 'undefined') return
+    const expires = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toUTCString()
+    document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`
+  }
+  const deleteCookie = (name: string) => {
+    if (typeof document === 'undefined') return
+    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax`
+  }
+  const [selectedOrgId, setSelectedOrgIdState] = useState<string | null>(null)
+  const [orgInitialized, setOrgInitialized] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const setSelectedOrgId = (id: string | null) => {
@@ -62,10 +53,12 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
           // Save to BOTH sessionStorage and localStorage for maximum persistence
           sessionStorage.setItem('selectedOrgId', id)
           localStorage.setItem('selectedOrgId', id)
+          setCookie('selectedOrgId', id)
           console.log('OrgContext: saved to both storages:', id)
         } else {
           sessionStorage.removeItem('selectedOrgId')
           localStorage.removeItem('selectedOrgId')
+          deleteCookie('selectedOrgId')
           console.log('OrgContext: removed from both storages')
         }
       }
@@ -78,6 +71,11 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
     // Don't fetch until auth has resolved
     if (authLoading) {
       console.log('OrgContext.refresh: auth still loading; skipping')
+      return
+    }
+    // Also wait until we attempted to restore selection from storage
+    if (!orgInitialized) {
+      console.log('OrgContext.refresh: org not initialized; skipping')
       return
     }
     if (!user) {
@@ -199,12 +197,12 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
 
       setOrgs(finalOrgs)
 
-      // Simple rule: Only auto-select if no org is currently selected
+      // Only auto-select if we have no selection after initialization
       if (!selectedOrgId && finalOrgs.length > 0) {
         console.log('OrgContext: no org selected, choosing first available:', finalOrgs[0].id)
         setSelectedOrgId(finalOrgs[0].id)
       }
-      
+
       // Otherwise: NEVER change the user's selection automatically
       console.log('OrgContext: keeping existing selection:', selectedOrgId)
     } catch (err) {
@@ -221,7 +219,7 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
     if (authLoading) return
 
     if (user?.id) {
-      // User is logged in - refresh their orgs
+      // User is logged in - refresh their orgs (after we initialize org)
       console.log('OrgContext: user logged in, refreshing orgs for:', user.email)
       refresh()
     } else if (user === null) {
@@ -231,7 +229,31 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
       setSelectedOrgId(null)
     }
     // If user is undefined, do nothing (still loading)
-  }, [user?.id, authLoading])
+  }, [user?.id, authLoading, orgInitialized])
+
+  // Mount: restore selectedOrgId from storage/cookie before any refresh
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined') {
+        const sessionStored = sessionStorage.getItem('selectedOrgId')
+        const localStored = localStorage.getItem('selectedOrgId')
+        const cookieStored = getCookie('selectedOrgId')
+        const stored = sessionStored || localStored || cookieStored || null
+        console.log('OrgContext: mount restore - session:', sessionStored, 'local:', localStored, 'cookie:', cookieStored)
+        if (stored) {
+          setSelectedOrgIdState(stored)
+          // sync across stores
+          sessionStorage.setItem('selectedOrgId', stored)
+          localStorage.setItem('selectedOrgId', stored)
+          setCookie('selectedOrgId', stored)
+        }
+      }
+    } catch (e) {
+      console.error('OrgContext: mount restore error:', e)
+    } finally {
+      setOrgInitialized(true)
+    }
+  }, [])
 
   // Extra persistence: save to storage before page unload
   useEffect(() => {
