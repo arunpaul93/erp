@@ -1,0 +1,715 @@
+'use client'
+
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/contexts/AuthContext'
+import { useOrg } from '@/contexts/OrgContext'
+import { supabase } from '@/lib/supabase'
+import * as d3 from 'd3-force'
+import { select as d3Select, Selection } from 'd3-selection'
+import { drag as d3Drag } from 'd3-drag'
+import { zoom as d3Zoom } from 'd3-zoom'
+
+interface NodeData {
+  id: string
+  node_type_id: string
+  name: string
+  entity_id?: string
+  metadata?: any
+  created_at: string
+  node_type: {
+    name: string
+    schema_name?: string
+    table_name?: string
+    label?: any
+  }
+}
+
+interface EdgeData {
+  id: string
+  from_node_id: string
+  to_node_id: string
+  edge_type_id: string
+  metadata?: any
+  edge_type: {
+    name: string
+    schema_name?: string
+    table_name?: string
+  }
+}
+
+interface GraphNode extends d3.SimulationNodeDatum {
+  id: string
+  name: string
+  type: string
+  color: string
+  size: number
+  data: NodeData
+}
+
+interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
+  source: string | GraphNode
+  target: string | GraphNode
+  type: string
+  data: EdgeData
+}
+
+interface GraphData {
+  nodes: GraphNode[]
+  links: GraphLink[]
+}
+
+// Obsidian-style color palette
+const NODE_COLORS = {
+  default: '#8b5cf6', // purple-500
+  user: '#60a5fa', // blue-400
+  employment_position: '#34d399', // emerald-400
+  employment_role: '#f87171', // red-400
+  organisation: '#fbbf24', // yellow-400
+  branch: '#06b6d4', // cyan-500
+  payroll_category: '#a78bfa', // violet-400
+  person: '#60a5fa', // blue-400
+  project: '#34d399', // emerald-400
+  document: '#f87171', // red-400
+  concept: '#a78bfa', // violet-400
+  event: '#fb7185', // pink-400
+  location: '#06b6d4', // cyan-500
+}
+
+// Edge type colors
+const EDGE_COLORS = {
+  'User Role Position': '#fbbf24', // yellow-400
+  'default': '#444444', // gray-600
+}
+
+export default function StructureGraphPage() {
+  const { user, loading } = useAuth()
+  const { selectedOrgId } = useOrg()
+  const router = useRouter()
+  const svgRef = useRef<SVGSVGElement>(null)
+  const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null)
+  const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] })
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
+  const [availableEdgeTypes, setAvailableEdgeTypes] = useState<string[]>([])
+  const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Set<string>>(new Set())
+  const [visibleNodeTypes, setVisibleNodeTypes] = useState<Set<string>>(new Set())
+  const [selectedLinkIds, setSelectedLinkIds] = useState<Set<string>>(new Set())
+  const [showLegend, setShowLegend] = useState(true)
+  // Refs to D3 selections for incremental updates
+  const linkSelRef = useRef<Selection<SVGLineElement, GraphLink, SVGGElement, unknown> | null>(null)
+  const linkLabelSelRef = useRef<Selection<SVGTextElement, GraphLink, SVGGElement, unknown> | null>(null)
+
+  // Derived: dynamic node types present in current graph
+  const nodeTypeStats = useMemo(() => {
+    const counts = new Map<string, number>()
+    graphData.nodes.forEach(n => {
+      counts.set(n.type, (counts.get(n.type) || 0) + 1)
+    })
+    const entries = Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
+    // Keep 'default' last if present
+    entries.sort((a, b) => {
+      if (a.type === 'default') return 1
+      if (b.type === 'default') return -1
+      return a.type.localeCompare(b.type)
+    })
+    return entries
+  }, [graphData.nodes])
+
+  // Fast lookup for nodes by id
+  const nodeById = useMemo(() => {
+    return new Map(graphData.nodes.map(n => [n.id, n]))
+  }, [graphData.nodes])
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/login')
+    }
+  }, [user, loading, router])
+
+  // Update dimensions on window resize
+  useEffect(() => {
+    const updateDimensions = () => {
+      setDimensions({
+        width: window.innerWidth,
+        height: window.innerHeight - 64 // nav height
+      })
+    }
+
+    updateDimensions()
+    window.addEventListener('resize', updateDimensions)
+    return () => window.removeEventListener('resize', updateDimensions)
+  }, [])
+
+  const fetchStructureData = useCallback(async () => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      if (!selectedOrgId) {
+        setGraphData({ nodes: [], links: [] })
+        setIsLoading(false)
+        return
+      }
+
+      // Only fetch edges with their connected nodes for the selected organization
+      const { data: edgesData, error: edgesError } = await supabase
+        .schema('structure')
+        .from('edges')
+        .select(`
+          id,
+          organisation_id,
+          metadata,
+          created_at,
+          from_node:from_node_id(id, name, node_types(name)),
+          to_node:to_node_id(id, name, node_types(name)),
+          edge_type:edge_types(name)
+        `)
+        .eq('organisation_id', selectedOrgId)
+      
+      if (edgesError) throw edgesError
+
+      if (!edgesData || edgesData.length === 0) {
+        setGraphData({ nodes: [], links: [] })
+        return
+      }
+
+      // Create a set of unique nodes from the edges
+      const nodeMap = new Map<string, GraphNode>()
+      
+      edgesData.forEach((edge: any) => {
+        // Add from_node if not already added
+        if (edge.from_node && !nodeMap.has(edge.from_node.id)) {
+          const nodeTypeName = edge.from_node.node_types?.name || 'default'
+          nodeMap.set(edge.from_node.id, {
+            id: edge.from_node.id,
+            name: edge.from_node.name || 'Unnamed Node',
+            type: nodeTypeName.toLowerCase().replace(' ', '_'),
+            color: NODE_COLORS[nodeTypeName.toLowerCase().replace(' ', '_') as keyof typeof NODE_COLORS] || NODE_COLORS.default,
+            size: 8 + Math.random() * 4,
+            data: edge.from_node
+          })
+        }
+
+        // Add to_node if not already added
+        if (edge.to_node && !nodeMap.has(edge.to_node.id)) {
+          const nodeTypeName = edge.to_node.node_types?.name || 'default'
+          nodeMap.set(edge.to_node.id, {
+            id: edge.to_node.id,
+            name: edge.to_node.name || 'Unnamed Node',
+            type: nodeTypeName.toLowerCase().replace(' ', '_'),
+            color: NODE_COLORS[nodeTypeName.toLowerCase().replace(' ', '_') as keyof typeof NODE_COLORS] || NODE_COLORS.default,
+            size: 8 + Math.random() * 4,
+            data: edge.to_node
+          })
+        }
+      })
+
+      // Convert map to array
+      const nodes = Array.from(nodeMap.values())
+
+      // Create links from edges
+      const links: GraphLink[] = edgesData
+        .filter((edge: any) => edge.from_node && edge.to_node) // Only include edges with valid nodes
+        .map((edge: any) => ({
+          source: edge.from_node.id,
+          target: edge.to_node.id,
+          type: edge.edge_type?.name || 'default',
+          data: edge
+        }))
+
+      setGraphData({ nodes, links })
+
+      // Collect available edge types and initialize visibility
+      const edgeTypes = [...new Set(links.map(link => link.type))]
+      console.log('Setting edge types:', edgeTypes, 'from links:', links.length)
+      setAvailableEdgeTypes(edgeTypes)
+      
+  // Initialize visibility once (first load) to show all edge types
+  setVisibleEdgeTypes(prev => (prev.size === 0 ? new Set(edgeTypes) : prev))
+
+  // Initialize visible node types once (first load)
+  const nodeTypes = [...new Set(nodes.map(n => n.type))]
+  setVisibleNodeTypes(prev => (prev.size === 0 ? new Set(nodeTypes) : prev))
+    } catch (err: any) {
+      setError(err.message || 'Failed to load structure data')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [selectedOrgId])
+
+  // D3 Force Simulation
+  useEffect(() => {
+    if (!graphData.nodes.length || !svgRef.current) return
+
+    const svg = d3Select(svgRef.current)
+    svg.selectAll('*').remove() // Clear previous render
+
+    const { width, height } = dimensions
+
+    // Create zoom behavior
+    const zoom = d3Zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.1, 4])
+      .on('zoom', (event) => {
+        container.attr('transform', event.transform)
+      })
+
+    svg.call(zoom)
+    // Clicking on empty background clears selected links
+    svg.on('click', null)
+    svg.on('click', () => {
+      setSelectedLinkIds(new Set())
+    })
+
+    // Create container for zoomable content
+    const container = svg.append('g')
+
+    // Filter nodes and links based on visibility state
+    const nodeVisible = (nodeId: string) => {
+      const n = nodeById.get(nodeId)
+      return !!n && visibleNodeTypes.has(n.type)
+    }
+    const filteredLinks = graphData.links.filter(link => {
+      const srcId = typeof link.source === 'string' ? link.source : link.source.id
+      const tgtId = typeof link.target === 'string' ? link.target : link.target.id
+      return visibleEdgeTypes.has(link.type) && nodeVisible(srcId) && nodeVisible(tgtId)
+    })
+    
+    // Debug logging
+    console.log('Debug info:', {
+      totalLinks: graphData.links.length,
+      filteredLinks: filteredLinks.length,
+      visibleEdgeTypesSize: visibleEdgeTypes.size,
+      visibleEdgeTypes: Array.from(visibleEdgeTypes),
+      linkTypes: graphData.links.map(l => l.type),
+      availableEdgeTypes: availableEdgeTypes
+    })
+
+  // Visible nodes
+  const visibleNodes = graphData.nodes.filter(n => visibleNodeTypes.has(n.type))
+  // Create simulation
+  const simulation = d3.forceSimulation<GraphNode>(visibleNodes)
+      .force('link', d3.forceLink<GraphNode, GraphLink>(filteredLinks)
+        .id(d => d.id)
+        .distance(80)
+        .strength(0.3)
+      )
+      .force('charge', d3.forceManyBody()
+        .strength(-200)
+        .distanceMax(300)
+      )
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .force('collision', d3.forceCollide<GraphNode>()
+        .radius(d => d.size + 2)
+        .strength(0.8)
+      )
+
+    simulationRef.current = simulation
+
+    // Create links
+    const link = container.append('g')
+      .attr('class', 'links')
+      .selectAll('line')
+      .data(filteredLinks)
+      .enter().append('line')
+      .attr('stroke', (d: GraphLink) => EDGE_COLORS[d.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+      .attr('stroke-opacity', 0.6)
+      .attr('stroke-width', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? 2.5 : 1.5)
+      .attr('data-selected', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? '1' : '0')
+      .style('cursor', 'pointer')
+      .on('mouseover', function(event, d) {
+        d3Select(this)
+          .attr('stroke', EDGE_COLORS[d.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+          .attr('stroke-opacity', 1)
+          .attr('stroke-width', 3)
+      })
+    .on('mouseout', function(event, d) {
+        d3Select(this)
+          .attr('stroke', EDGE_COLORS[d.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+          .attr('stroke-opacity', 0.6)
+      .attr('stroke-width', (this as SVGLineElement).getAttribute('data-selected') === '1' ? 2.5 : 1.5)
+      })
+      .on('click', function(event, d) {
+        event.stopPropagation()
+        // toggle selection for this link
+        const next = new Set(selectedLinkIds)
+        if (next.has(d.data.id)) next.delete(d.data.id)
+        else next.add(d.data.id)
+        setSelectedLinkIds(next)
+      })
+    
+    link.append('title')
+      .text((d: GraphLink) => {
+        const src = typeof d.source === 'string' ? nodeById.get(d.source) : d.source
+        const tgt = typeof d.target === 'string' ? nodeById.get(d.target) : d.target
+        return `${d.type}: ${src?.name ?? 'Unknown'} → ${tgt?.name ?? 'Unknown'}`
+      })
+    
+  console.log('Created', link.size(), 'link elements for', filteredLinks.length, 'links to show')
+
+    // Create link labels (edge type names), hidden by default
+  const linkLabels = container.append('g')
+      .attr('class', 'link-labels')
+      .selectAll('text')
+      .data(filteredLinks)
+      .enter().append('text')
+      .text((d: GraphLink) => d.type)
+  .attr('font-size', 8)
+      .attr('font-family', 'Inter, sans-serif')
+      .attr('fill', '#e5e7eb')
+      .attr('stroke', '#0f172a')
+  .attr('stroke-width', 2)
+      .attr('paint-order', 'stroke')
+      .attr('text-anchor', 'middle')
+      .attr('opacity', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? 1 : 0)
+      .style('pointer-events', 'none')
+
+  // cache selections for later incremental updates
+  linkSelRef.current = link as unknown as Selection<SVGLineElement, GraphLink, SVGGElement, unknown>
+  linkLabelSelRef.current = linkLabels as unknown as Selection<SVGTextElement, GraphLink, SVGGElement, unknown>
+
+    // Create nodes
+    const node = container.append('g')
+      .attr('class', 'nodes')
+      .selectAll('g')
+  .data(visibleNodes)
+      .enter().append('g')
+      .attr('class', 'node')
+      .style('cursor', 'pointer')
+      .call(d3Drag<SVGGElement, GraphNode>()
+        .on('start', (event, d) => {
+          if (!event.active) simulation.alphaTarget(0.3).restart()
+          d.fx = d.x
+          d.fy = d.y
+        })
+        .on('drag', (event, d) => {
+          d.fx = event.x
+          d.fy = event.y
+        })
+        .on('end', (event, d) => {
+          if (!event.active) simulation.alphaTarget(0)
+          d.fx = null
+          d.fy = null
+        })
+      )
+
+    // Add circles to nodes
+    node.append('circle')
+      .attr('r', d => d.size)
+      .attr('fill', d => d.color)
+      .attr('stroke', '#ffffff')
+      .attr('stroke-width', 2)
+      .attr('stroke-opacity', 0.8)
+      .style('filter', 'drop-shadow(0 0 6px rgba(139, 92, 246, 0.3))')
+
+    // Add labels to nodes
+    node.append('text')
+      .text(d => d.name)
+      .attr('x', 0)
+      .attr('y', d => d.size + 16)
+      .attr('text-anchor', 'middle')
+      .attr('font-family', 'Inter, sans-serif')
+      .attr('font-size', '12px')
+      .attr('fill', '#e5e7eb')
+      .attr('font-weight', '500')
+      .style('pointer-events', 'none')
+      .style('user-select', 'none')
+
+    // Add hover effects
+  node
+      .on('mouseover', function(event, d) {
+        d3Select(this).select('circle')
+          .transition()
+          .duration(200)
+          .attr('r', d.size * 1.2)
+          .style('filter', 'drop-shadow(0 0 12px rgba(139, 92, 246, 0.6))')
+        
+        // Highlight connected links
+        link
+          .attr('stroke', (l: GraphLink) => EDGE_COLORS[l.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+          .attr('stroke-width', (l: GraphLink) => ((l.source as GraphNode).id === d.id || (l.target as GraphNode).id === d.id) ? 3 : 1.2)
+          .attr('stroke-opacity', (l: GraphLink) => ((l.source as GraphNode).id === d.id || (l.target as GraphNode).id === d.id) ? 0.9 : 0.2)
+
+  // do not change labels on hover; selection controls visibility
+      })
+  .on('mouseout', function(event, d) {
+        d3Select(this).select('circle')
+          .transition()
+          .duration(200)
+          .attr('r', d.size)
+          .style('filter', 'drop-shadow(0 0 6px rgba(139, 92, 246, 0.3))')
+        
+        // Reset link styles
+        link
+          .attr('stroke', (l: GraphLink) => EDGE_COLORS[l.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+          .attr('stroke-width', 1.5)
+          .attr('stroke-opacity', 0.6)
+      })
+      .on('click', function(event) {
+        // prevent background from clearing selection when clicking on a node
+        event.stopPropagation()
+      })
+
+    // Update positions on simulation tick
+    simulation.on('tick', () => {
+      link
+        .attr('x1', d => (d.source as GraphNode).x!)
+        .attr('y1', d => (d.source as GraphNode).y!)
+        .attr('x2', d => (d.target as GraphNode).x!)
+        .attr('y2', d => (d.target as GraphNode).y!)
+
+      // position labels at link midpoints
+      linkLabels
+        .attr('x', d => (((d.source as GraphNode).x! + (d.target as GraphNode).x!) / 2))
+        .attr('y', d => (((d.source as GraphNode).y! + (d.target as GraphNode).y!) / 2))
+
+      node
+        .attr('transform', d => `translate(${d.x},${d.y})`)
+    })
+
+    return () => {
+      simulation.stop()
+    }
+  }, [graphData, dimensions, visibleEdgeTypes, visibleNodeTypes, nodeById, availableEdgeTypes])
+
+  // Incremental visual update for link selection without rebuilding the graph
+  useEffect(() => {
+    if (!linkSelRef.current || !linkLabelSelRef.current) return
+    linkSelRef.current
+      .attr('data-selected', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? '1' : '0')
+      .attr('stroke-width', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? 2.5 : 1.5)
+    linkLabelSelRef.current
+      .attr('opacity', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? 1 : 0)
+  }, [selectedLinkIds])
+
+  useEffect(() => {
+    if (user && selectedOrgId) {
+      fetchStructureData()
+    }
+  }, [user, selectedOrgId, fetchStructureData])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-950">
+        <div className="text-lg text-gray-100">Loading...</div>
+      </div>
+    )
+  }
+
+  if (!user) {
+    return null // Will redirect to login
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-950">
+      <nav className="bg-gray-900 shadow">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex justify-between h-16">
+            <div className="flex items-center">
+              <button
+                onClick={() => router.push('/home')}
+                className="text-xl font-semibold text-yellow-400 hover:text-yellow-300"
+              >
+                ⚡ Minnal
+              </button>
+            </div>
+            <div className="flex items-center space-x-4">
+              <button
+                onClick={fetchStructureData}
+                className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-3 py-1 rounded text-sm font-medium"
+                disabled={isLoading}
+              >
+                {isLoading ? 'Refreshing...' : 'Refresh'}
+              </button>
+              <span className="text-sm text-gray-300">
+                {user.email}
+              </span>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <main className="w-full h-screen">
+        <div className="flex h-full">
+          {/* Graph Container */}
+          <div className="flex-1 relative bg-gray-950 overflow-hidden">
+            {error ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-red-400 mb-2">Error loading structure data</div>
+                  <div className="text-gray-400 text-sm">{error}</div>
+                  <button 
+                    onClick={fetchStructureData}
+                    className="mt-4 bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-4 py-2 rounded text-sm"
+                  >
+                    Retry
+                  </button>
+                </div>
+              </div>
+            ) : isLoading ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-gray-100">Loading structure graph...</div>
+              </div>
+            ) : !selectedOrgId ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-gray-400 mb-2">No organization selected</div>
+                  <div className="text-gray-500 text-sm">Please select an organization to view its structure</div>
+                </div>
+              </div>
+            ) : graphData.nodes.length === 0 ? (
+              <div className="h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-gray-400 mb-2">No structure data found</div>
+                  <div className="text-gray-500 text-sm">Add nodes and edges to visualize your organizational structure</div>
+                </div>
+              </div>
+            ) : (
+              <svg
+                ref={svgRef}
+                width={dimensions.width}
+                height={dimensions.height}
+                style={{ background: 'radial-gradient(circle at center, #1e293b 0%, #0f172a 100%)' }}
+              />
+            )}
+
+            {/* Edge Type Legend */}
+            {graphData.links.length > 0 && availableEdgeTypes.length > 0 && (
+              <div className="absolute top-4 left-4 bg-gray-900/95 backdrop-blur border border-gray-700 rounded-lg p-4 max-w-xs">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-sm font-semibold text-gray-100">Edge Types</h3>
+                  <button
+                    onClick={() => setShowLegend(!showLegend)}
+                    className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                  >
+                    {showLegend ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                {showLegend && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between pb-2 border-b border-gray-700">
+                      <span className="text-xs text-gray-400">Show/Hide:</span>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setVisibleEdgeTypes(new Set(availableEdgeTypes))}
+                          className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors px-1"
+                        >
+                          All
+                        </button>
+                        <span className="text-xs text-gray-600">|</span>
+                        <button
+                          onClick={() => setVisibleEdgeTypes(new Set())}
+                          className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors px-1"
+                        >
+                          None
+                        </button>
+                      </div>
+                    </div>
+                    {availableEdgeTypes.map(edgeType => {
+                      const isVisible = visibleEdgeTypes.has(edgeType)
+                      const linkCount = graphData.links.filter(link => link.type === edgeType).length
+                      const edgeColor = EDGE_COLORS[edgeType as keyof typeof EDGE_COLORS] || EDGE_COLORS.default
+                      return (
+                        <div key={edgeType} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isVisible}
+                            onChange={(e) => {
+                              const newVisibleTypes = new Set(visibleEdgeTypes)
+                              if (e.target.checked) {
+                                newVisibleTypes.add(edgeType)
+                              } else {
+                                newVisibleTypes.delete(edgeType)
+                              }
+                              setVisibleEdgeTypes(newVisibleTypes)
+                            }}
+                            className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-yellow-400 focus:ring-yellow-400 focus:ring-1"
+                          />
+                          <div className="flex items-center gap-2 flex-1">
+                            <div 
+                              className={`w-8 h-0.5 ${isVisible ? 'opacity-100' : 'opacity-50'}`}
+                              style={{ backgroundColor: edgeColor }}
+                            ></div>
+                            <span className={`text-xs ${isVisible ? 'text-gray-300' : 'text-gray-500'}`}>
+                              {edgeType} ({linkCount})
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {/* Node Types toggles */}
+                    {nodeTypeStats.length > 0 && (
+                      <div className="pt-3 mt-1 border-t border-gray-700">
+                        <div className="flex items-center justify-between pb-2">
+                          <div className="text-xs font-semibold text-gray-300">Node Types</div>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => setVisibleNodeTypes(new Set(nodeTypeStats.map(nt => nt.type)))}
+                              className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors px-1"
+                            >
+                              All
+                            </button>
+                            <span className="text-xs text-gray-600">|</span>
+                            <button
+                              onClick={() => setVisibleNodeTypes(new Set())}
+                              className="text-xs text-yellow-400 hover:text-yellow-300 transition-colors px-1"
+                            >
+                              None
+                            </button>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          {nodeTypeStats.map(({ type, count }) => {
+                            const color = NODE_COLORS[type as keyof typeof NODE_COLORS] || NODE_COLORS.default
+                            const isVisible = visibleNodeTypes.has(type)
+                            return (
+                              <label key={type} className="flex items-center gap-2 cursor-pointer select-none">
+                                <input
+                                  type="checkbox"
+                                  checked={isVisible}
+                                  onChange={(e) => {
+                                    const next = new Set(visibleNodeTypes)
+                                    if (e.target.checked) next.add(type)
+                                    else next.delete(type)
+                                    setVisibleNodeTypes(next)
+                                  }}
+                                  className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-yellow-400 focus:ring-yellow-400 focus:ring-1"
+                                />
+                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color, opacity: isVisible ? 1 : 0.5 }}></div>
+                                <span className={`text-xs ${isVisible ? 'text-gray-300' : 'text-gray-500'} capitalize`}>{type.replaceAll('_',' ')}</span>
+                                <span className="text-[10px] text-gray-500">({count})</span>
+                              </label>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    <div className="pt-2 border-t border-gray-700">
+                      <div className="text-xs text-gray-500">
+                        Visible: {
+                          graphData.links.filter(l => {
+                            const srcId = typeof l.source === 'string' ? l.source : l.source.id
+                            const tgtId = typeof l.target === 'string' ? l.target : l.target.id
+                            const src = nodeById.get(srcId)
+                            const tgt = nodeById.get(tgtId)
+                            return (
+                              visibleEdgeTypes.has(l.type) &&
+                              (!!src && visibleNodeTypes.has(src.type)) &&
+                              (!!tgt && visibleNodeTypes.has(tgt.type))
+                            )
+                          }).length
+                        } / {graphData.links.length} edges
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Side panel removed */}
+        </div>
+      </main>
+    </div>
+  )
+}

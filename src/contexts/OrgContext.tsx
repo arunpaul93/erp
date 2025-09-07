@@ -75,26 +75,66 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
         return
       }
 
-      // Now fetch organisations for the public user from employee_organisation table
+      // Now fetch organisations for the public user from user_role_position table
       const { data, error } = await supabase
-        .from('employee_organisation')
-        .select('organisation_id')
+        .from('user_role_position')
+        .select('organisation_role_position_id')
         .eq('user_id', appUser.id)
 
       if (error) {
-        console.error('Error fetching organisations:', error)
+        console.error('Error fetching user role positions:', error)
         setOrgs([])
         return
       }
 
       if (!data || data.length === 0) {
-        console.debug('No employee_organisation rows for user', appUser.id)
+        console.debug('No user_role_position rows for user', appUser.id)
+        setOrgs([])
+        return
+      }
+
+      // Get organisation role position IDs
+      const orgRolePositionIds = [...new Set(data.map(r => r.organisation_role_position_id))]
+
+      // Fetch organisation role IDs from organisation role positions
+      const { data: orgRolePositionData, error: orgRolePositionError } = await supabase
+        .from('organisation_role_position')
+        .select('organisation_role_id')
+        .in('id', orgRolePositionIds)
+
+      if (orgRolePositionError) {
+        console.error('Error fetching organisation role positions:', orgRolePositionError)
+        setOrgs([])
+        return
+      }
+
+      if (!orgRolePositionData || orgRolePositionData.length === 0) {
+        setOrgs([])
+        return
+      }
+
+      // Get unique organisation role IDs
+      const orgRoleIds = [...new Set(orgRolePositionData.map(r => r.organisation_role_id))]
+
+      // Fetch organisation IDs from organisation roles
+      const { data: orgRoleData, error: orgRoleError } = await supabase
+        .from('organisation_role')
+        .select('organisation_id')
+        .in('id', orgRoleIds)
+
+      if (orgRoleError) {
+        console.error('Error fetching organisation roles:', orgRoleError)
+        setOrgs([])
+        return
+      }
+
+      if (!orgRoleData || orgRoleData.length === 0) {
         setOrgs([])
         return
       }
 
       // Get unique organisation IDs
-      const orgIds = [...new Set(data.map(r => r.organisation_id))]
+      const orgIds = [...new Set(orgRoleData.map(r => r.organisation_id))]
 
       // Fetch organisation names
       const { data: orgData, error: orgError } = await supabase
@@ -128,7 +168,7 @@ export const OrgProvider = ({ children }: { children: React.ReactNode }) => {
 
       // ensure selectedOrgId is still valid
       if (finalOrgs.length > 0) {
-        const exists = finalOrgs.some((m: Org) => m.id === selectedOrgId)
+        const exists = finalOrgs.some((org: Org) => org.id === selectedOrgId)
         if (!exists) setSelectedOrgId(finalOrgs[0].id)
       } else {
         setSelectedOrgId(null)
