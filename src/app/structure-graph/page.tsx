@@ -76,10 +76,113 @@ const NODE_COLORS = {
     location: '#06b6d4', // cyan-500
 }
 
-// Edge type colors
+// Edge type colors - distinctive colors for each edge type
 const EDGE_COLORS = {
+    // Primary relationship types
     'User Role Position': '#fbbf24', // yellow-400
-    'default': '#444444', // gray-600
+    'Employee Position': '#34d399', // emerald-400
+    'Position Role': '#f87171', // red-400
+    'Organisation Branch': '#06b6d4', // cyan-500
+    'Branch Department': '#a78bfa', // violet-400
+    'Employee Department': '#fb7185', // pink-400
+    
+    // Hierarchical relationships
+    'Reports To': '#3b82f6', // blue-500
+    'Manages': '#10b981', // emerald-500
+    'Supervises': '#f59e0b', // amber-500
+    'Reports': '#ef4444', // red-500
+    
+    // Project relationships
+    'Project Member': '#8b5cf6', // purple-500
+    'Project Lead': '#06b6d4', // cyan-500
+    'Project Manager': '#f97316', // orange-500
+    'Assigned To': '#84cc16', // lime-500
+    
+    // Document relationships
+    'Document Owner': '#ec4899', // pink-500
+    'Document Viewer': '#6366f1', // indigo-500
+    'Document Editor': '#14b8a6', // teal-500
+    'Created By': '#f472b6', // pink-400
+    
+    // Operational relationships
+    'Process Flow': '#0ea5e9', // sky-500
+    'Workflow': '#8b5cf6', // purple-500
+    'Task Assignment': '#22c55e', // green-500
+    'Resource Allocation': '#f59e0b', // amber-500
+    
+    // Location relationships
+    'Located At': '#06b6d4', // cyan-500
+    'Works At': '#10b981', // emerald-500
+    'Based In': '#3b82f6', // blue-500
+    
+    // Time-based relationships
+    'Schedule': '#f97316', // orange-500
+    'Shift': '#84cc16', // lime-500
+    'Roster': '#ec4899', // pink-500
+    
+    // Additional common relationship types
+    'Subordinate': '#94a3b8', // gray-400 (neutral hierarchy)
+    'Collaborates With': '#22d3ee', // cyan-400 (partnership)
+    'Reviewed By': '#8b5cf6', // purple-500 (validation)
+    'Approval Chain': '#dc2626', // red-600 (formal approval)
+    'Operates From': '#f97316', // orange-500 (operational base)
+    'Timeframe': '#6366f1', // indigo-500 (duration)
+    'Communicates With': '#22d3ee', // cyan-400 (communication)
+    'Notifies': '#fbbf24', // yellow-400 (notification)
+    'Escalates To': '#ef4444', // red-500 (escalation)
+    'Receives From': '#34d399', // emerald-400 (receipt)
+    'Budget Approval': '#dc2626', // red-600 (financial authority)
+    'Cost Center': '#f59e0b', // amber-500 (cost management)
+    'Revenue Source': '#22c55e', // green-500 (income)
+    'Expense Category': '#ef4444', // red-500 (expenditure)
+    'Has Access To': '#6366f1', // indigo-500 (access rights)
+    'Grants Permission': '#8b5cf6', // purple-500 (authorization)
+    'Requires Approval': '#f97316', // orange-500 (approval needed)
+    'Security Clearance': '#dc2626', // red-600 (security)
+    
+    // Default fallback
+    'default': '#6b7280', // gray-500
+}
+
+// Fallback colors for unknown edge types - ensuring good contrast and accessibility
+const FALLBACK_EDGE_COLORS = [
+    '#8b5cf6', // purple-500
+    '#06b6d4', // cyan-500
+    '#f59e0b', // amber-500
+    '#ef4444', // red-500
+    '#10b981', // emerald-500
+    '#3b82f6', // blue-500
+    '#f97316', // orange-500
+    '#84cc16', // lime-500
+    '#ec4899', // pink-500
+    '#6366f1', // indigo-500
+]
+
+// Get edge color with fallback for unknown types
+function getEdgeColor(edgeType: string): string {
+    // First try the defined edge colors
+    const definedColor = EDGE_COLORS[edgeType as keyof typeof EDGE_COLORS]
+    if (definedColor) return definedColor
+    
+    // For unknown types, generate a consistent color based on the edge type name
+    const hash = edgeType.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
+    const colorIndex = hash % FALLBACK_EDGE_COLORS.length
+    return FALLBACK_EDGE_COLORS[colorIndex]
+}
+
+// Get edge stroke pattern for additional visual distinction
+function getEdgeStrokeDashArray(edgeType: string): string | undefined {
+    // Add dashed patterns for certain relationship types to enhance visual distinction
+    if (edgeType.toLowerCase().includes('approval') || edgeType.toLowerCase().includes('permission')) {
+        return '5,5' // Dashed for approval-related edges
+    }
+    if (edgeType.toLowerCase().includes('schedule') || edgeType.toLowerCase().includes('time')) {
+        return '3,3' // Small dashes for time-related edges
+    }
+    if (edgeType.toLowerCase().includes('communication') || edgeType.toLowerCase().includes('notification')) {
+        return '2,2' // Dotted for communication edges
+    }
+    return undefined // Solid line for all other edges
 }
 
 export default function StructureGraphPage() {
@@ -97,6 +200,22 @@ export default function StructureGraphPage() {
     const [visibleNodeTypes, setVisibleNodeTypes] = useState<Set<string>>(new Set())
     const [selectedLinkIds, setSelectedLinkIds] = useState<Set<string>>(new Set())
     const [showLegend, setShowLegend] = useState(true)
+    
+    // Physics control states
+    const [showPhysicsPanel, setShowPhysicsPanel] = useState(false)
+    const [physicsParams, setPhysicsParams] = useState({
+        linkDistance: 80,
+        linkStrength: 0.3,
+        chargeStrength: -200,
+        chargeDistanceMax: 300,
+        collisionRadius: 2,
+        collisionStrength: 0.8,
+        centerStrength: 0.1,
+        velocityDecay: 0.4,
+        alphaDecay: 0.0228,
+        alphaMin: 0.001
+    })
+    
     // Refs to D3 selections for incremental updates
     const zoomRef = useRef<any>(null)
     const currentTransformRef = useRef<any>(null)
@@ -310,18 +429,23 @@ export default function StructureGraphPage() {
         const simulation = d3.forceSimulation<GraphNode>(visibleNodes)
             .force('link', d3.forceLink<GraphNode, GraphLink>(filteredLinks)
                 .id(d => d.id)
-                .distance(80)
-                .strength(0.3)
+                .distance(physicsParams.linkDistance)
+                .strength(physicsParams.linkStrength)
             )
             .force('charge', d3.forceManyBody()
-                .strength(-200)
-                .distanceMax(300)
+                .strength(physicsParams.chargeStrength)
+                .distanceMax(physicsParams.chargeDistanceMax)
             )
-            .force('center', d3.forceCenter(width / 2, height / 2))
+            .force('center', d3.forceCenter(width / 2, height / 2)
+                .strength(physicsParams.centerStrength)
+            )
             .force('collision', d3.forceCollide<GraphNode>()
-                .radius(d => d.size + 2)
-                .strength(0.8)
+                .radius(d => d.size + physicsParams.collisionRadius)
+                .strength(physicsParams.collisionStrength)
             )
+            .velocityDecay(physicsParams.velocityDecay)
+            .alphaDecay(physicsParams.alphaDecay)
+            .alphaMin(physicsParams.alphaMin)
 
         simulationRef.current = simulation
 
@@ -331,20 +455,21 @@ export default function StructureGraphPage() {
             .selectAll('line')
             .data(filteredLinks)
             .enter().append('line')
-            .attr('stroke', (d: GraphLink) => EDGE_COLORS[d.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+            .attr('stroke', (d: GraphLink) => getEdgeColor(d.type))
             .attr('stroke-opacity', 0.6)
             .attr('stroke-width', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? 2.5 : 1.5)
+            .attr('stroke-dasharray', (d: GraphLink) => getEdgeStrokeDashArray(d.type) || null)
             .attr('data-selected', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? '1' : '0')
             .style('cursor', 'pointer')
             .on('mouseover', function (event, d) {
                 d3Select(this)
-                    .attr('stroke', EDGE_COLORS[d.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+                    .attr('stroke', getEdgeColor(d.type))
                     .attr('stroke-opacity', 1)
                     .attr('stroke-width', 3)
             })
             .on('mouseout', function (event, d) {
                 d3Select(this)
-                    .attr('stroke', EDGE_COLORS[d.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+                    .attr('stroke', getEdgeColor(d.type))
                     .attr('stroke-opacity', 0.6)
                     .attr('stroke-width', (this as SVGLineElement).getAttribute('data-selected') === '1' ? 2.5 : 1.5)
             })
@@ -450,7 +575,7 @@ export default function StructureGraphPage() {
 
                 // Highlight connected links
                 link
-                    .attr('stroke', (l: GraphLink) => EDGE_COLORS[l.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+                    .attr('stroke', (l: GraphLink) => getEdgeColor(l.type))
                     .attr('stroke-width', (l: GraphLink) => ((l.source as GraphNode).id === d.id || (l.target as GraphNode).id === d.id) ? 3 : 1.2)
                     .attr('stroke-opacity', (l: GraphLink) => ((l.source as GraphNode).id === d.id || (l.target as GraphNode).id === d.id) ? 0.9 : 0.2)
 
@@ -465,7 +590,7 @@ export default function StructureGraphPage() {
 
                 // Reset link styles
                 link
-                    .attr('stroke', (l: GraphLink) => EDGE_COLORS[l.type as keyof typeof EDGE_COLORS] || EDGE_COLORS.default)
+                    .attr('stroke', (l: GraphLink) => getEdgeColor(l.type))
                     .attr('stroke-width', 1.5)
                     .attr('stroke-opacity', 0.6)
             })
@@ -546,8 +671,8 @@ export default function StructureGraphPage() {
         simulation.nodes(visibleNodes)
         simulation.force('link', d3.forceLink<GraphNode, GraphLink>(filteredLinks)
             .id(d => d.id)
-            .distance(80)
-            .strength(0.3)
+            .distance(physicsParams.linkDistance)
+            .strength(physicsParams.linkStrength)
         )
         simulation.alpha(0.3).restart()
 
@@ -567,6 +692,43 @@ export default function StructureGraphPage() {
         linkLabelSelRef.current
             .attr('opacity', (d: GraphLink) => selectedLinkIds.has(d.data.id) ? 1 : 0)
     }, [selectedLinkIds])
+
+    // Update simulation physics when parameters change
+    useEffect(() => {
+        const simulation = simulationRef.current
+        if (!simulation) return
+
+        // Update all force parameters
+        const linkForce = simulation.force('link') as d3.ForceLink<GraphNode, GraphLink>
+        if (linkForce) {
+            linkForce.distance(physicsParams.linkDistance).strength(physicsParams.linkStrength)
+        }
+
+        const chargeForce = simulation.force('charge') as d3.ForceManyBody<GraphNode>
+        if (chargeForce) {
+            chargeForce.strength(physicsParams.chargeStrength).distanceMax(physicsParams.chargeDistanceMax)
+        }
+
+        const centerForce = simulation.force('center') as d3.ForceCenter<GraphNode>
+        if (centerForce) {
+            centerForce.strength(physicsParams.centerStrength)
+        }
+
+        const collisionForce = simulation.force('collision') as d3.ForceCollide<GraphNode>
+        if (collisionForce) {
+            collisionForce
+                .radius(d => d.size + physicsParams.collisionRadius)
+                .strength(physicsParams.collisionStrength)
+        }
+
+        // Update simulation parameters
+        simulation
+            .velocityDecay(physicsParams.velocityDecay)
+            .alphaDecay(physicsParams.alphaDecay)
+            .alphaMin(physicsParams.alphaMin)
+            .alpha(0.3)
+            .restart()
+    }, [physicsParams])
 
     useEffect(() => {
         if (user && selectedOrgId) {
@@ -694,7 +856,7 @@ export default function StructureGraphPage() {
                                         {availableEdgeTypes.map(edgeType => {
                                             const isVisible = visibleEdgeTypes.has(edgeType)
                                             const linkCount = graphData.links.filter(link => link.type === edgeType).length
-                                            const edgeColor = EDGE_COLORS[edgeType as keyof typeof EDGE_COLORS] || EDGE_COLORS.default
+                                            const edgeColor = getEdgeColor(edgeType)
                                             return (
                                                 <div key={edgeType} className="flex items-center gap-2">
                                                     <input
@@ -791,6 +953,257 @@ export default function StructureGraphPage() {
                                 )}
                             </div>
                         )}
+
+                        {/* Physics Control Panel */}
+                        <div className="absolute top-4 right-4">
+                            <div className="bg-gray-900/95 backdrop-blur border border-gray-700 rounded-lg">
+                                <div className="flex items-center justify-between p-3 border-b border-gray-700">
+                                    <h3 className="text-sm font-semibold text-gray-100 flex items-center gap-2">
+                                        <span>⚡</span>
+                                        Physics Laws
+                                    </h3>
+                                    <button
+                                        onClick={() => setShowPhysicsPanel(!showPhysicsPanel)}
+                                        className="text-xs text-gray-400 hover:text-gray-200 transition-colors"
+                                    >
+                                        {showPhysicsPanel ? 'Hide' : 'Show'}
+                                    </button>
+                                </div>
+                                {showPhysicsPanel && (
+                                    <div className="p-4 space-y-4 w-64">
+                                        {/* Link Forces */}
+                                        <div className="space-y-3">
+                                            <h4 className="text-xs font-medium text-gray-300 border-b border-gray-700 pb-1">Link Forces</h4>
+                                            <div className="space-y-2">
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Distance: {physicsParams.linkDistance}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="20"
+                                                        max="200"
+                                                        value={physicsParams.linkDistance}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, linkDistance: parseInt(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Strength: {physicsParams.linkStrength.toFixed(2)}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.1"
+                                                        value={physicsParams.linkStrength}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, linkStrength: parseFloat(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Charge Forces */}
+                                        <div className="space-y-3">
+                                            <h4 className="text-xs font-medium text-gray-300 border-b border-gray-700 pb-1">Repulsion Forces</h4>
+                                            <div className="space-y-2">
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Strength: {physicsParams.chargeStrength}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="-1000"
+                                                        max="-10"
+                                                        value={physicsParams.chargeStrength}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, chargeStrength: parseInt(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Max Distance: {physicsParams.chargeDistanceMax}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="100"
+                                                        max="1000"
+                                                        value={physicsParams.chargeDistanceMax}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, chargeDistanceMax: parseInt(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Collision Forces */}
+                                        <div className="space-y-3">
+                                            <h4 className="text-xs font-medium text-gray-300 border-b border-gray-700 pb-1">Collision</h4>
+                                            <div className="space-y-2">
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Radius: +{physicsParams.collisionRadius}px
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="20"
+                                                        value={physicsParams.collisionRadius}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, collisionRadius: parseInt(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Strength: {physicsParams.collisionStrength.toFixed(2)}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.1"
+                                                        value={physicsParams.collisionStrength}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, collisionStrength: parseFloat(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Center Force */}
+                                        <div className="space-y-3">
+                                            <h4 className="text-xs font-medium text-gray-300 border-b border-gray-700 pb-1">Centering</h4>
+                                            <div>
+                                                <label className="text-xs text-gray-400 block mb-1">
+                                                    Strength: {physicsParams.centerStrength.toFixed(2)}
+                                                </label>
+                                                <input
+                                                    type="range"
+                                                    min="0"
+                                                    max="1"
+                                                    step="0.1"
+                                                    value={physicsParams.centerStrength}
+                                                    onChange={(e) => setPhysicsParams(prev => ({ ...prev, centerStrength: parseFloat(e.target.value) }))}
+                                                    className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Simulation Parameters */}
+                                        <div className="space-y-3">
+                                            <h4 className="text-xs font-medium text-gray-300 border-b border-gray-700 pb-1">Simulation</h4>
+                                            <div className="space-y-2">
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Velocity Decay: {physicsParams.velocityDecay.toFixed(2)}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0"
+                                                        max="1"
+                                                        step="0.1"
+                                                        value={physicsParams.velocityDecay}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, velocityDecay: parseFloat(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-gray-400 block mb-1">
+                                                        Alpha Decay: {physicsParams.alphaDecay.toFixed(4)}
+                                                    </label>
+                                                    <input
+                                                        type="range"
+                                                        min="0.001"
+                                                        max="0.1"
+                                                        step="0.001"
+                                                        value={physicsParams.alphaDecay}
+                                                        onChange={(e) => setPhysicsParams(prev => ({ ...prev, alphaDecay: parseFloat(e.target.value) }))}
+                                                        className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+                                                    />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Reset Button */}
+                                        <div className="pt-3 border-t border-gray-700 space-y-2">
+                                            <div className="text-xs text-gray-400 mb-2">Presets:</div>
+                                            <div className="grid grid-cols-2 gap-2">
+                                                <button
+                                                    onClick={() => setPhysicsParams({
+                                                        linkDistance: 60,
+                                                        linkStrength: 0.5,
+                                                        chargeStrength: -150,
+                                                        chargeDistanceMax: 200,
+                                                        collisionRadius: 1,
+                                                        collisionStrength: 0.9,
+                                                        centerStrength: 0.2,
+                                                        velocityDecay: 0.3,
+                                                        alphaDecay: 0.03,
+                                                        alphaMin: 0.001
+                                                    })}
+                                                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white py-1.5 px-2 rounded transition-colors"
+                                                >
+                                                    Tight
+                                                </button>
+                                                <button
+                                                    onClick={() => setPhysicsParams({
+                                                        linkDistance: 120,
+                                                        linkStrength: 0.2,
+                                                        chargeStrength: -300,
+                                                        chargeDistanceMax: 400,
+                                                        collisionRadius: 4,
+                                                        collisionStrength: 0.6,
+                                                        centerStrength: 0.05,
+                                                        velocityDecay: 0.6,
+                                                        alphaDecay: 0.01,
+                                                        alphaMin: 0.001
+                                                    })}
+                                                    className="text-xs bg-green-600 hover:bg-green-700 text-white py-1.5 px-2 rounded transition-colors"
+                                                >
+                                                    Loose
+                                                </button>
+                                                <button
+                                                    onClick={() => setPhysicsParams({
+                                                        linkDistance: 90,
+                                                        linkStrength: 0.8,
+                                                        chargeStrength: -100,
+                                                        chargeDistanceMax: 250,
+                                                        collisionRadius: 1,
+                                                        collisionStrength: 1.0,
+                                                        centerStrength: 0.3,
+                                                        velocityDecay: 0.2,
+                                                        alphaDecay: 0.05,
+                                                        alphaMin: 0.001
+                                                    })}
+                                                    className="text-xs bg-purple-600 hover:bg-purple-700 text-white py-1.5 px-2 rounded transition-colors"
+                                                >
+                                                    Rigid
+                                                </button>
+                                                <button
+                                                    onClick={() => setPhysicsParams({
+                                                        linkDistance: 80,
+                                                        linkStrength: 0.3,
+                                                        chargeStrength: -200,
+                                                        chargeDistanceMax: 300,
+                                                        collisionRadius: 2,
+                                                        collisionStrength: 0.8,
+                                                        centerStrength: 0.1,
+                                                        velocityDecay: 0.4,
+                                                        alphaDecay: 0.0228,
+                                                        alphaMin: 0.001
+                                                    })}
+                                                    className="text-xs bg-yellow-600 hover:bg-yellow-700 text-white py-1.5 px-2 rounded transition-colors"
+                                                >
+                                                    Default
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
 
                     {/* Side panel removed */}

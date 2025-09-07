@@ -40,3 +40,34 @@ body {
 .animate-fadeIn {
   animation: fadeIn 0.3s ease-out;
 }
+
+/* Custom slider styles for physics controls */
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: #fbbf24;
+  cursor: pointer;
+  box-shadow: 0 0 2px 0 rgba(251, 191, 36, 0.5);
+}
+
+.slider::-webkit-slider-thumb:hover {
+  background: #f59e0b;
+  box-shadow: 0 0 6px 0 rgba(251, 191, 36, 0.8);
+}
+
+.slider::-moz-range-thumb {
+  height: 14px;
+  width: 14px;
+  border-radius: 50%;
+  background: #fbbf24;
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 0 2px 0 rgba(251, 191, 36, 0.5);
+}
+
+.slider::-moz-range-thumb:hover {
+  background: #f59e0b;
+  box-shadow: 0 0 6px 0 rgba(251, 191, 36, 0.8);
+}
