@@ -102,6 +102,7 @@ export default function StructureGraphPage() {
     const currentTransformRef = useRef<any>(null)
     const linkSelRef = useRef<Selection<SVGLineElement, GraphLink, SVGGElement, unknown> | null>(null)
     const linkLabelSelRef = useRef<Selection<SVGTextElement, GraphLink, SVGGElement, unknown> | null>(null)
+    const nodeSelRef = useRef<Selection<SVGGElement, GraphNode, SVGGElement, unknown> | null>(null)
 
     // Derived: dynamic node types present in current graph
     const nodeTypeStats = useMemo(() => {
@@ -275,7 +276,7 @@ export default function StructureGraphPage() {
         })
 
         // Create container for zoomable content
-        const container = svg.append('g')
+        const container = svg.append('g').attr('class', 'zoom-container')
 
         // Filter nodes and links based on visibility state
         const nodeVisible = (nodeId: string) => {
@@ -381,15 +382,20 @@ export default function StructureGraphPage() {
         linkSelRef.current = link as unknown as Selection<SVGLineElement, GraphLink, SVGGElement, unknown>
         linkLabelSelRef.current = linkLabels as unknown as Selection<SVGTextElement, GraphLink, SVGGElement, unknown>
 
-        // Create nodes
+        // Create nodes - create ALL nodes, handle visibility separately
         const node = container.append('g')
             .attr('class', 'nodes')
             .selectAll('g')
-            .data(visibleNodes)
+            .data(graphData.nodes) // Use all nodes, not filtered
             .enter().append('g')
             .attr('class', 'node')
             .style('cursor', 'pointer')
-            .call(d3Drag<SVGGElement, GraphNode>()
+            .style('display', (d: GraphNode) => visibleNodeTypes.has(d.type) ? null : 'none') // Set initial visibility
+        
+        // Cache node selection for incremental updates
+        nodeSelRef.current = node as unknown as Selection<SVGGElement, GraphNode, SVGGElement, unknown>
+        
+        node.call(d3Drag<SVGGElement, GraphNode>()
                 .on('start', (event, d) => {
                     if (!event.active) simulation.alphaTarget(0.3).restart()
                     d.fx = d.x
@@ -487,7 +493,7 @@ export default function StructureGraphPage() {
 
     // Separate effect to update visibility without recreating the entire graph
     useEffect(() => {
-        if (!linkSelRef.current || !linkLabelSelRef.current || !simulationRef.current) return
+        if (!linkSelRef.current || !linkLabelSelRef.current || !nodeSelRef.current || !simulationRef.current) return
         
         // Filter nodes and links based on visibility state
         const nodeVisible = (nodeId: string) => {
@@ -506,22 +512,28 @@ export default function StructureGraphPage() {
         linkSelRef.current
             .style('display', function(d: any) { 
                 const link = d as GraphLink
-                return filteredLinkIds.has(link.data.id) ? 'block' : 'none'
+                return filteredLinkIds.has(link.data.id) ? null : 'none'
             })
         linkLabelSelRef.current
             .style('display', function(d: any) { 
                 const link = d as GraphLink
-                return filteredLinkIds.has(link.data.id) ? 'block' : 'none'
+                return filteredLinkIds.has(link.data.id) ? null : 'none'
             })
 
-        // Update node visibility
-        const svgContainer = d3Select(svgRef.current).select('.zoom-container')
-        const nodeSelection = svgContainer.select('.nodes').selectAll('.node')
+        // Update node visibility using cached selection
         const visibleNodeIds = new Set(visibleNodes.map(n => n.id))
-        nodeSelection
+        console.log('Updating node visibility:', {
+            totalNodes: graphData.nodes.length,
+            visibleNodeTypes: Array.from(visibleNodeTypes),
+            visibleNodeIds: Array.from(visibleNodeIds),
+            nodeSelectionSize: nodeSelRef.current.size()
+        })
+        
+        nodeSelRef.current
             .style('display', function(d: any) { 
                 const node = d as GraphNode
-                return visibleNodeIds.has(node.id) ? 'block' : 'none'
+                const isVisible = visibleNodeTypes.has(node.type)
+                return isVisible ? null : 'none'
             })
 
         // Update simulation forces with new filtered data
@@ -534,7 +546,11 @@ export default function StructureGraphPage() {
         )
         simulation.alpha(0.3).restart()
 
-        console.log('Updated visibility - visible nodes:', visibleNodes.length, 'visible links:', filteredLinks.length)
+        console.log('Node toggle update complete:', { 
+            visibleNodes: visibleNodes.length, 
+            visibleLinks: filteredLinks.length,
+            visibleNodeTypes: Array.from(visibleNodeTypes)
+        })
     }, [visibleEdgeTypes, visibleNodeTypes, graphData, nodeById])
 
     // Incremental visual update for link selection without rebuilding the graph
