@@ -86,41 +86,41 @@ const EDGE_COLORS = {
     'Organisation Branch': '#06b6d4', // cyan-500
     'Branch Department': '#a78bfa', // violet-400
     'Employee Department': '#fb7185', // pink-400
-    
+
     // Hierarchical relationships
     'Reports To': '#3b82f6', // blue-500
     'Manages': '#10b981', // emerald-500
     'Supervises': '#f59e0b', // amber-500
     'Reports': '#ef4444', // red-500
-    
+
     // Project relationships
     'Project Member': '#8b5cf6', // purple-500
     'Project Lead': '#06b6d4', // cyan-500
     'Project Manager': '#f97316', // orange-500
     'Assigned To': '#84cc16', // lime-500
-    
+
     // Document relationships
     'Document Owner': '#ec4899', // pink-500
     'Document Viewer': '#6366f1', // indigo-500
     'Document Editor': '#14b8a6', // teal-500
     'Created By': '#f472b6', // pink-400
-    
+
     // Operational relationships
     'Process Flow': '#0ea5e9', // sky-500
     'Workflow': '#8b5cf6', // purple-500
     'Task Assignment': '#22c55e', // green-500
     'Resource Allocation': '#f59e0b', // amber-500
-    
+
     // Location relationships
     'Located At': '#06b6d4', // cyan-500
     'Works At': '#10b981', // emerald-500
     'Based In': '#3b82f6', // blue-500
-    
+
     // Time-based relationships
     'Schedule': '#f97316', // orange-500
     'Shift': '#84cc16', // lime-500
     'Roster': '#ec4899', // pink-500
-    
+
     // Additional common relationship types
     'Subordinate': '#94a3b8', // gray-400 (neutral hierarchy)
     'Collaborates With': '#22d3ee', // cyan-400 (partnership)
@@ -140,7 +140,7 @@ const EDGE_COLORS = {
     'Grants Permission': '#8b5cf6', // purple-500 (authorization)
     'Requires Approval': '#f97316', // orange-500 (approval needed)
     'Security Clearance': '#dc2626', // red-600 (security)
-    
+
     // Default fallback
     'default': '#6b7280', // gray-500
 }
@@ -164,7 +164,7 @@ function getEdgeColor(edgeType: string): string {
     // First try the defined edge colors
     const definedColor = EDGE_COLORS[edgeType as keyof typeof EDGE_COLORS]
     if (definedColor) return definedColor
-    
+
     // For unknown types, generate a consistent color based on the edge type name
     const hash = edgeType.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
     const colorIndex = hash % FALLBACK_EDGE_COLORS.length
@@ -201,7 +201,7 @@ export default function StructureGraphPage() {
     const [visibleNodeTypes, setVisibleNodeTypes] = useState<Set<string>>(new Set())
     const [selectedLinkIds, setSelectedLinkIds] = useState<Set<string>>(new Set())
     const [showLegend, setShowLegend] = useState(true)
-    
+
     // Physics control states
     const [showPhysicsPanel, setShowPhysicsPanel] = useState(false)
     const [physicsParams, setPhysicsParams] = useState({
@@ -216,7 +216,7 @@ export default function StructureGraphPage() {
         alphaDecay: 0.0228,
         alphaMin: 0.001
     })
-    
+
     // Refs to D3 selections for incremental updates
     const zoomRef = useRef<any>(null)
     const currentTransformRef = useRef<any>(null)
