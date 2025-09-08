@@ -44,6 +44,7 @@ interface GraphNode extends d3.SimulationNodeDatum {
     type: string
     color: string
     size: number
+    flowLevel?: number
     data: NodeData
 }
 
@@ -353,6 +354,41 @@ export default function StructureGraphPage() {
             // Initialize visible node types once (first load)
             const nodeTypes = [...new Set(nodes.map(n => n.type))]
             setVisibleNodeTypes(prev => (prev.size === 0 ? new Set(nodeTypes) : prev))
+
+            // Compute flow levels: nodes with no incoming links are level 0; successors increase
+            const incoming = new Map<string, number>()
+            nodes.forEach(n => incoming.set(n.id, 0))
+            links.forEach(l => {
+                const tid = typeof l.target === 'string' ? l.target : l.target.id
+                incoming.set(tid, (incoming.get(tid) || 0) + 1)
+            })
+            const adj = new Map<string, GraphNode[]>()
+            nodes.forEach(n => adj.set(n.id, []))
+            links.forEach(l => {
+                const sid = typeof l.source === 'string' ? l.source : l.source.id
+                const tid = typeof l.target === 'string' ? l.target : l.target.id
+                const s = nodeMap.get(sid)
+                const t = nodeMap.get(tid)
+                if (s && t) adj.get(s.id)!.push(t)
+            })
+            const q: GraphNode[] = []
+            nodes.forEach(n => {
+                n.flowLevel = undefined
+                if ((incoming.get(n.id) || 0) === 0) {
+                    n.flowLevel = 0
+                    q.push(n)
+                }
+            })
+            while (q.length) {
+                const u = q.shift()!
+                const next = (u.flowLevel || 0) + 1
+                for (const v of adj.get(u.id) || []) {
+                    if (v.flowLevel == null || next > v.flowLevel) {
+                        v.flowLevel = next
+                        q.push(v)
+                    }
+                }
+            }
         } catch (err: any) {
             setError(err.message || 'Failed to load structure data')
         } finally {
@@ -425,7 +461,12 @@ export default function StructureGraphPage() {
 
         // Visible nodes
         const visibleNodes = graphData.nodes.filter(n => visibleNodeTypes.has(n.type))
-        // Create simulation
+        // Create simulation: left-to-right flow using flowLevel columns and y-banding
+        const maxLevel = Math.max(0, ...visibleNodes.map(n => n.flowLevel ?? 0))
+        const leftMargin = 120
+        const rightMargin = 160
+        const colWidth = Math.max(1, (width - leftMargin - rightMargin) / Math.max(1, maxLevel))
+
         const simulation = d3.forceSimulation<GraphNode>(visibleNodes)
             .force('link', d3.forceLink<GraphNode, GraphLink>(filteredLinks)
                 .id(d => d.id)
@@ -436,13 +477,12 @@ export default function StructureGraphPage() {
                 .strength(physicsParams.chargeStrength)
                 .distanceMax(physicsParams.chargeDistanceMax)
             )
-            .force('center', d3.forceCenter(width / 2, height / 2)
-                .strength(physicsParams.centerStrength)
-            )
             .force('collision', d3.forceCollide<GraphNode>()
                 .radius(d => d.size + physicsParams.collisionRadius)
                 .strength(physicsParams.collisionStrength)
             )
+            .force('x-level', d3.forceX<GraphNode>(d => leftMargin + (d.flowLevel ?? 0) * colWidth).strength(0.45))
+            .force('y-band', d3.forceY<GraphNode>((d, i) => height / 2 + (i - (visibleNodes.length - 1) / 2) * 8).strength(0.08))
             .velocityDecay(physicsParams.velocityDecay)
             .alphaDecay(physicsParams.alphaDecay)
             .alphaMin(physicsParams.alphaMin)
@@ -601,11 +641,14 @@ export default function StructureGraphPage() {
 
         // Update positions on simulation tick
         simulation.on('tick', () => {
+            const edgePointRight = (n: GraphNode) => ({ x: (n.x ?? 0) + n.size, y: n.y ?? 0 })
+            const edgePointLeft = (n: GraphNode) => ({ x: (n.x ?? 0) - n.size, y: n.y ?? 0 })
+
             link
-                .attr('x1', d => (d.source as GraphNode).x!)
-                .attr('y1', d => (d.source as GraphNode).y!)
-                .attr('x2', d => (d.target as GraphNode).x!)
-                .attr('y2', d => (d.target as GraphNode).y!)
+                .attr('x1', d => edgePointRight(d.source as GraphNode).x)
+                .attr('y1', d => edgePointRight(d.source as GraphNode).y)
+                .attr('x2', d => edgePointLeft(d.target as GraphNode).x)
+                .attr('y2', d => edgePointLeft(d.target as GraphNode).y)
 
             // position labels at link midpoints
             linkLabels
