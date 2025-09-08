@@ -82,33 +82,38 @@ function getStepColor(level: number): string {
     }
 }
 
-// Get step shape and size based on children
+// Get step shape and size based on children - Obsidian style
 function getStepVisual(step: ProcessStep): { shape: 'circle' | 'rectangle', size: number } {
     const hasChildren = step.children.length > 0
     return {
-        shape: hasChildren ? 'rectangle' : 'circle',
-        size: hasChildren ? 80 + (step.children.length * 20) : 12
+        shape: 'circle', // Obsidian-style: All nodes are circles
+        size: hasChildren ? 16 : 12 // Slightly larger for nodes with children, but all circles
     }
 }
 
 // Calculate hierarchical positions for nested layout
 function calculateHierarchicalPositions(steps: ProcessStep[], width: number, height: number) {
     const rootSteps = steps.filter(step => !step.parent_step_id)
-    const padding = 100
+    const padding = 150 // Increased padding for more edge space
 
-    // Position root steps in a more spaced out grid
-    const cols = Math.min(3, Math.ceil(Math.sqrt(rootSteps.length)))
+    // Position root steps in a more spaced out grid with larger cells
+    const cols = Math.min(2, Math.ceil(Math.sqrt(rootSteps.length))) // Reduced max columns for wider spread
     const rows = Math.ceil(rootSteps.length / cols)
     const cellWidth = (width - padding * 2) / cols
     const cellHeight = (height - padding * 2) / rows
+
+    // Add extra spacing between cells
+    const extraSpacing = 100
+    const actualCellWidth = cellWidth + extraSpacing
+    const actualCellHeight = cellHeight + extraSpacing
 
     rootSteps.forEach((rootStep, index) => {
         const col = index % cols
         const row = Math.floor(index / cols)
 
-        // Position root step with more spacing
-        rootStep.x = padding + col * cellWidth + cellWidth / 2
-        rootStep.y = padding + row * cellHeight + cellHeight / 2
+        // Position root step with much more spacing
+        rootStep.x = padding + col * actualCellWidth + actualCellWidth / 2
+        rootStep.y = padding + row * actualCellHeight + actualCellHeight / 2
 
         // Position children within the parent rectangle
         positionChildrenInParent(rootStep)
@@ -159,20 +164,20 @@ export default function ProcessFlowPage() {
     const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Set<string>>(new Set())
     const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set())
     const [showLegend, setShowLegend] = useState(true)
-    const [layoutStartStepId, setLayoutStartStepId] = useState<string | null>(null)
+    // Removed layoutStartStepId for pure Obsidian-style physics
 
-    // Physics control states
+    // Physics control states - Obsidian-style parameters
     const [showPhysicsPanel, setShowPhysicsPanel] = useState(false)
     const [physicsParams, setPhysicsParams] = useState({
-        linkDistance: 100,
-        linkStrength: 0.4,
-        chargeStrength: -300,
-        chargeDistanceMax: 400,
-        collisionRadius: 5,
-        collisionStrength: 0.9,
-        centerStrength: 0.1,
-        velocityDecay: 0.4,
-        alphaDecay: 0.0228,
+        linkDistance: 80,         // Closer connections for organic clustering
+        linkStrength: 0.7,        // Stronger connections to form natural groups
+        chargeStrength: -200,     // Moderate repulsion for organic spread
+        chargeDistanceMax: 300,   // Localized repulsion zones
+        collisionRadius: 8,       // Minimal collision for natural overlap
+        collisionStrength: 0.6,   // Softer collision boundaries
+        centerStrength: 0.02,     // Very weak center pull for organic distribution
+        velocityDecay: 0.4,       // Standard physics damping
+        alphaDecay: 0.0228,       // Standard settling time
         alphaMin: 0.001
     })
 
@@ -380,8 +385,12 @@ export default function ProcessFlowPage() {
         // Filter visible edges
         const filteredEdges = processFlowData.edges.filter(edge => visibleEdgeTypes.has(edge.type))
 
-        // Calculate initial hierarchical positions (used as simulation starting points)
-        calculateHierarchicalPositions(processFlowData.steps, width, height)
+        // Obsidian-style: Random initial positions for organic clustering
+        processFlowData.steps.forEach(step => {
+            // Random positions within the viewport for natural physics settling
+            step.x = Math.random() * (width - 200) + 100
+            step.y = Math.random() * (height - 200) + 100
+        })
 
         // Single-start flow levels to avoid many roots on the left
         const stepById = new Map(processFlowData.steps.map(s => [s.id, s] as const))
@@ -397,29 +406,8 @@ export default function ProcessFlowPage() {
                 indeg.set(t.id, (indeg.get(t.id) || 0) + 1)
             }
         })
-        const candidates = processFlowData.steps.filter(s => (indeg.get(s.id) || 0) === 0)
-        candidates.sort((a, b) => (outAdj.get(b.id)!.length - outAdj.get(a.id)!.length))
-        const defaultStart = (candidates[0]?.id) || processFlowData.steps[0].id
-        const startId = layoutStartStepId ?? defaultStart
-        if (!layoutStartStepId) setLayoutStartStepId(startId)
-
-        // BFS from selected start; push non-reachable to one column after the deepest
-        processFlowData.steps.forEach(s => { s.flowLevel = undefined })
-        const q: ProcessStep[] = []
-        const start = stepById.get(startId)
-        if (start) { start.flowLevel = 0; q.push(start) }
-        while (q.length) {
-            const u = q.shift()!
-            const nextL = (u.flowLevel || 0) + 1
-            for (const v of outAdj.get(u.id) || []) {
-                if (v.flowLevel == null || nextL > v.flowLevel) {
-                    v.flowLevel = nextL
-                    q.push(v)
-                }
-            }
-        }
-        const maxAssigned = Math.max(0, ...processFlowData.steps.map(s => s.flowLevel ?? 0))
-        processFlowData.steps.forEach(s => { if (s.flowLevel == null) s.flowLevel = maxAssigned + 1 })
+        // Obsidian-style: Remove all flow level computation for pure physics
+        // Just need the basic adjacency structure for edge processing
 
         // Stop any prior simulation
         if (simulationRef.current) {
@@ -427,15 +415,49 @@ export default function ProcessFlowPage() {
             simulationRef.current = null
         }
 
+        // Detect bidirectional edges and add offset information
+        const edgeMap = new Map<string, ProcessFlowEdge[]>()
+        filteredEdges.forEach(edge => {
+            const sourceId = edge.data.from_step_id
+            const targetId = edge.data.to_step_id
+            const key = sourceId < targetId ? `${sourceId}-${targetId}` : `${targetId}-${sourceId}`
+            if (!edgeMap.has(key)) edgeMap.set(key, [])
+            edgeMap.get(key)!.push(edge)
+        })
+
+        // Add bidirectional offset information to edges
+        const edgesWithOffset = filteredEdges.map(edge => {
+            const sourceId = edge.data.from_step_id
+            const targetId = edge.data.to_step_id
+            const key = sourceId < targetId ? `${sourceId}-${targetId}` : `${targetId}-${sourceId}`
+            const edgeGroup = edgeMap.get(key)!
+
+            let offset = 0
+            let isBidirectional = false
+
+            if (edgeGroup.length > 1) {
+                isBidirectional = true
+                // Find which direction this edge is
+                const isForward = sourceId < targetId
+                if (isForward) {
+                    offset = -10 // offset one way
+                } else {
+                    offset = 10 // offset the other way
+                }
+            }
+
+            return { ...edge, offset, isBidirectional }
+        })
+
         // Split edges: inter-container (under) vs intra-container (over) for better visibility
-        const interEdges = filteredEdges.filter(e => {
+        const interEdges = edgesWithOffset.filter(e => {
             const s = e.source as ProcessStep
             const t = e.target as ProcessStep
             const sameParent = !!(s.parent_step_id && s.parent_step_id === t.parent_step_id)
             const parentChild = s.id === t.parent_step_id || t.id === s.parent_step_id
             return !(sameParent || parentChild)
         })
-        const intraEdges = filteredEdges.filter(e => {
+        const intraEdges = edgesWithOffset.filter(e => {
             const s = e.source as ProcessStep
             const t = e.target as ProcessStep
             const sameParent = !!(s.parent_step_id && s.parent_step_id === t.parent_step_id)
@@ -449,10 +471,17 @@ export default function ProcessFlowPage() {
             .selectAll('line')
             .data(interEdges)
             .enter().append('line')
-            .attr('stroke', (d: ProcessFlowEdge) => d.color)
+            .attr('stroke', (d: any) => d.color)
             .attr('stroke-opacity', 0.95)
-            .attr('stroke-width', (d: ProcessFlowEdge) => selectedEdgeIds.has(d.data.id) ? 3.2 : 2.6)
-            .attr('stroke-dasharray', (d: ProcessFlowEdge) => {
+            .attr('stroke-width', (d: any) => {
+                const baseWidth = selectedEdgeIds.has(d.data.id) ? 3.2 : 2.6
+                return d.isBidirectional ? baseWidth + 0.5 : baseWidth // Slightly thicker for bidirectional
+            })
+            .attr('stroke-dasharray', (d: any) => {
+                if (d.isBidirectional) {
+                    // Special pattern for bidirectional edges
+                    return '6,2,2,2'
+                }
                 switch (d.pattern) {
                     case 'dashed': return '8,4'
                     case 'dotted': return '2,3'
@@ -475,10 +504,17 @@ export default function ProcessFlowPage() {
             .selectAll('line')
             .data(intraEdges)
             .enter().append('line')
-            .attr('stroke', (d: ProcessFlowEdge) => d.color)
+            .attr('stroke', (d: any) => d.color)
             .attr('stroke-opacity', 1)
-            .attr('stroke-width', (d: ProcessFlowEdge) => selectedEdgeIds.has(d.data.id) ? 3.2 : 2.8)
-            .attr('stroke-dasharray', (d: ProcessFlowEdge) => {
+            .attr('stroke-width', (d: any) => {
+                const baseWidth = selectedEdgeIds.has(d.data.id) ? 3.2 : 2.8
+                return d.isBidirectional ? baseWidth + 0.5 : baseWidth // Slightly thicker for bidirectional
+            })
+            .attr('stroke-dasharray', (d: any) => {
+                if (d.isBidirectional) {
+                    // Special pattern for bidirectional edges
+                    return '6,2,2,2'
+                }
                 switch (d.pattern) {
                     case 'dashed': return '8,4'
                     case 'dotted': return '2,3'
@@ -670,25 +706,93 @@ export default function ProcessFlowPage() {
         // Function to update positions (used by physics tick and drags)
         const updatePositions = () => {
             const updateEdgeSel = (sel: any) => sel
-                .attr('x1', (d: ProcessFlowEdge) => {
+                .attr('x1', (d: any) => {
                     const source = d.source as ProcessStep
-                    // Exit on right side for both rectangles and circles
-                    if (source.shape === 'rectangle') return source.x! + (source.size * 2.2) / 2
-                    return (source.x ?? 0) + source.size
+                    const target = d.target as ProcessStep
+
+                    // Calculate direction vector
+                    const dx = (target.x ?? 0) - (source.x ?? 0)
+                    const dy = (target.y ?? 0) - (source.y ?? 0)
+                    const dist = Math.sqrt(dx * dx + dy * dy)
+
+                    if (dist === 0) return source.x ?? 0
+
+                    // Obsidian-style: Simple circle-to-circle connections
+                    const radius = source.size * 0.9
+                    let x1 = (source.x ?? 0) + (dx / dist) * radius
+
+                    // Apply perpendicular offset for bidirectional edges
+                    if (d.offset) {
+                        const perpX = -dy / dist
+                        x1 += perpX * d.offset
+                    }
+                    return x1
                 })
-                .attr('y1', (d: ProcessFlowEdge) => {
+                .attr('y1', (d: any) => {
                     const source = d.source as ProcessStep
-                    return source.y!
-                })
-                .attr('x2', (d: ProcessFlowEdge) => {
                     const target = d.target as ProcessStep
-                    // Entry on left side for both rectangles and circles
-                    if (target.shape === 'rectangle') return target.x! - (target.size * 2.2) / 2
-                    return (target.x ?? 0) - target.size
+
+                    // Calculate direction vector
+                    const dx = (target.x ?? 0) - (source.x ?? 0)
+                    const dy = (target.y ?? 0) - (source.y ?? 0)
+                    const dist = Math.sqrt(dx * dx + dy * dy)
+
+                    if (dist === 0) return source.y ?? 0
+
+                    // Obsidian-style: Simple circle-to-circle connections
+                    const radius = source.size * 0.9
+                    let y1 = (source.y ?? 0) + (dy / dist) * radius
+
+                    // Apply perpendicular offset for bidirectional edges
+                    if (d.offset) {
+                        const perpY = dx / dist
+                        y1 += perpY * d.offset
+                    }
+                    return y1
                 })
-                .attr('y2', (d: ProcessFlowEdge) => {
+                .attr('x2', (d: any) => {
+                    const source = d.source as ProcessStep
                     const target = d.target as ProcessStep
-                    return target.y!
+
+                    // Calculate direction vector (from source to target)
+                    const dx = (target.x ?? 0) - (source.x ?? 0)
+                    const dy = (target.y ?? 0) - (source.y ?? 0)
+                    const dist = Math.sqrt(dx * dx + dy * dy)
+
+                    if (dist === 0) return target.x ?? 0
+
+                    // Obsidian-style: Simple circle-to-circle connections
+                    const radius = target.size * 0.9
+                    let x2 = (target.x ?? 0) - (dx / dist) * radius
+
+                    // Apply perpendicular offset for bidirectional edges
+                    if (d.offset) {
+                        const perpX = -dy / dist
+                        x2 += perpX * d.offset
+                    }
+                    return x2
+                })
+                .attr('y2', (d: any) => {
+                    const source = d.source as ProcessStep
+                    const target = d.target as ProcessStep
+
+                    // Calculate direction vector (from source to target)
+                    const dx = (target.x ?? 0) - (source.x ?? 0)
+                    const dy = (target.y ?? 0) - (source.y ?? 0)
+                    const dist = Math.sqrt(dx * dx + dy * dy)
+
+                    if (dist === 0) return target.y ?? 0
+
+                    // Obsidian-style: Simple circle-to-circle connections
+                    const radius = target.size * 0.9
+                    let y2 = (target.y ?? 0) - (dy / dist) * radius
+
+                    // Apply perpendicular offset for bidirectional edges
+                    if (d.offset) {
+                        const perpY = dx / dist
+                        y2 += perpY * d.offset
+                    }
+                    return y2
                 })
 
             updateEdgeSel(edgesUnder)
@@ -701,6 +805,9 @@ export default function ProcessFlowPage() {
         // Constraint: keep children within parent rectangles during simulation
         const idMap = new Map(processFlowData.steps.map(s => [s.id, s] as const))
         const enforceChildBounds = () => {
+            // Obsidian-style: No hierarchical constraints, let physics work naturally
+            // Comment out child bounds enforcement for organic clustering
+            /*
             processFlowData.steps.forEach(d => {
                 if (d.parent_step_id) {
                     const parent = idMap.get(d.parent_step_id)
@@ -715,14 +822,10 @@ export default function ProcessFlowPage() {
                     d.y = Math.max(minY, Math.min(maxY, d.y ?? parent.y))
                 }
             })
+            */
         }
 
         // Create physics simulation
-        const maxLevel = Math.max(0, ...processFlowData.steps.map(s => s.flowLevel ?? s.level))
-        const leftMargin = 120
-        const rightMargin = 160
-        const colWidth = Math.max(1, (width - leftMargin - rightMargin) / Math.max(1, maxLevel))
-
         const sim = d3.forceSimulation<ProcessStep>(processFlowData.steps)
             .force('link', d3.forceLink<ProcessStep, ProcessFlowEdge>(filteredEdges as any)
                 .id((n: any) => n.id)
@@ -730,25 +833,12 @@ export default function ProcessFlowPage() {
                 .strength(physicsParams.linkStrength)
             )
             .force('charge', d3.forceManyBody().strength(physicsParams.chargeStrength).distanceMax(physicsParams.chargeDistanceMax))
-            .force('collide', d3.forceCollide<ProcessStep>().radius(d => (d.shape === 'rectangle' ? d.size * 1.2 : d.size + physicsParams.collisionRadius)).strength(physicsParams.collisionStrength))
-            // Drive a left-to-right layout by pulling nodes to x-columns based on flowLevel (fallback to hierarchy level)
-            .force('x-level', d3.forceX<ProcessStep>(d => leftMargin + (d.flowLevel ?? d.level) * colWidth).strength(0.5))
-            // Vertical banding: group siblings and spread them by index to avoid overlap
-            .force('y-band', d3.forceY<ProcessStep>(d => {
-                if (d.parent_step_id) {
-                    const p = idMap.get(d.parent_step_id)
-                    const base = (p?.y ?? height / 2)
-                    // spread siblings +/-
-                    const siblings = processFlowData.steps.filter(s => s.parent_step_id === d.parent_step_id)
-                    const idx = siblings.findIndex(s => s.id === d.id)
-                    const offset = (idx - (siblings.length - 1) / 2) * 30
-                    return base + offset
-                }
-                // roots: preserve initial y placement banded by their index
-                const roots = processFlowData.steps.filter(s => !s.parent_step_id)
-                const ridx = roots.findIndex(s => s.id === d.id)
-                return height / 2 + (ridx - (roots.length - 1) / 2) * 60
-            }).strength(0.12))
+            .force('collide', d3.forceCollide<ProcessStep>().radius(d => {
+                // Obsidian-style: minimal collision for natural clustering
+                const baseRadius = d.shape === 'rectangle' ? d.size * 0.8 : d.size * 1.1
+                return baseRadius + physicsParams.collisionRadius
+            }).strength(physicsParams.collisionStrength))
+            .force('center', d3.forceCenter(width / 2, height / 2).strength(physicsParams.centerStrength))
             .velocityDecay(physicsParams.velocityDecay)
             .alphaDecay(physicsParams.alphaDecay)
             .alphaMin(physicsParams.alphaMin)
@@ -761,7 +851,7 @@ export default function ProcessFlowPage() {
 
         // Kick it off
         sim.alpha(1).restart()
-    }, [processFlowData, dimensions, visibleEdgeTypes, selectedEdgeIds, layoutStartStepId])
+    }, [processFlowData, dimensions, visibleEdgeTypes, selectedEdgeIds])
 
     // No physics simulation to update
 
@@ -927,30 +1017,27 @@ export default function ProcessFlowPage() {
                                                 </div>
                                             )
                                         })}
+
+                                        {/* Bidirectional edges info */}
+                                        <div className="pt-2 border-t border-gray-700">
+                                            <div className="flex items-center gap-2">
+                                                <div
+                                                    className="w-8 h-0.5 bg-gray-400"
+                                                    style={{
+                                                        background: 'repeating-linear-gradient(to right, #9ca3af 0px, #9ca3af 6px, transparent 6px, transparent 8px, #9ca3af 8px, #9ca3af 10px, transparent 10px, transparent 12px)'
+                                                    }}
+                                                ></div>
+                                                <span className="text-xs text-gray-400">
+                                                    Bidirectional (offset)
+                                                </span>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        {/* Layout start picker */}
-                        {processFlowData.steps.length > 0 && (
-                            <div className="absolute top-4 right-4 bg-gray-900/95 backdrop-blur border border-gray-700 rounded-lg p-3 max-w-xs">
-                                <div className="flex items-center gap-2">
-                                    <span className="text-xs text-gray-400 whitespace-nowrap">Start from:</span>
-                                    <select
-                                        value={layoutStartStepId ?? ''}
-                                        onChange={(e) => setLayoutStartStepId(e.target.value || null)}
-                                        className="bg-gray-800 text-gray-100 text-xs rounded px-2 py-1 border border-gray-700"
-                                    >
-                                        {processFlowData.steps.map(s => (
-                                            <option key={s.id} value={s.id}>{s.name}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Physics Control Panel removed - no gravity needed */}
+                        {/* Obsidian-style: No layout controls needed, pure physics */}
                     </div>
                 </div>
             </main>

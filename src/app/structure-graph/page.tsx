@@ -461,12 +461,7 @@ export default function StructureGraphPage() {
 
         // Visible nodes
         const visibleNodes = graphData.nodes.filter(n => visibleNodeTypes.has(n.type))
-        // Create simulation: left-to-right flow using flowLevel columns and y-banding
-        const maxLevel = Math.max(0, ...visibleNodes.map(n => n.flowLevel ?? 0))
-        const leftMargin = 120
-        const rightMargin = 160
-        const colWidth = Math.max(1, (width - leftMargin - rightMargin) / Math.max(1, maxLevel))
-
+        // Create simulation
         const simulation = d3.forceSimulation<GraphNode>(visibleNodes)
             .force('link', d3.forceLink<GraphNode, GraphLink>(filteredLinks)
                 .id(d => d.id)
@@ -477,12 +472,13 @@ export default function StructureGraphPage() {
                 .strength(physicsParams.chargeStrength)
                 .distanceMax(physicsParams.chargeDistanceMax)
             )
+            .force('center', d3.forceCenter(width / 2, height / 2)
+                .strength(physicsParams.centerStrength)
+            )
             .force('collision', d3.forceCollide<GraphNode>()
                 .radius(d => d.size + physicsParams.collisionRadius)
                 .strength(physicsParams.collisionStrength)
             )
-            .force('x-level', d3.forceX<GraphNode>(d => leftMargin + (d.flowLevel ?? 0) * colWidth).strength(0.45))
-            .force('y-band', d3.forceY<GraphNode>((d, i) => height / 2 + (i - (visibleNodes.length - 1) / 2) * 8).strength(0.08))
             .velocityDecay(physicsParams.velocityDecay)
             .alphaDecay(physicsParams.alphaDecay)
             .alphaMin(physicsParams.alphaMin)
@@ -641,14 +637,11 @@ export default function StructureGraphPage() {
 
         // Update positions on simulation tick
         simulation.on('tick', () => {
-            const edgePointRight = (n: GraphNode) => ({ x: (n.x ?? 0) + n.size, y: n.y ?? 0 })
-            const edgePointLeft = (n: GraphNode) => ({ x: (n.x ?? 0) - n.size, y: n.y ?? 0 })
-
             link
-                .attr('x1', d => edgePointRight(d.source as GraphNode).x)
-                .attr('y1', d => edgePointRight(d.source as GraphNode).y)
-                .attr('x2', d => edgePointLeft(d.target as GraphNode).x)
-                .attr('y2', d => edgePointLeft(d.target as GraphNode).y)
+                .attr('x1', d => (d.source as GraphNode).x!)
+                .attr('y1', d => (d.source as GraphNode).y!)
+                .attr('x2', d => (d.target as GraphNode).x!)
+                .attr('y2', d => (d.target as GraphNode).y!)
 
             // position labels at link midpoints
             linkLabels
@@ -658,6 +651,8 @@ export default function StructureGraphPage() {
             node
                 .attr('transform', d => `translate(${d.x},${d.y})`)
         })
+
+        simulationRef.current = simulation
 
         return () => {
             simulation.stop()
