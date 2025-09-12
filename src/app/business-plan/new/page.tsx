@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import StrategyCanvas from '@/components/StrategyCanvas'
 import type { CanvasData } from '@/components/StrategyCanvas'
-import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
 
 export default function NewBusinessPlanPage() {
     const router = useRouter()
@@ -27,10 +26,8 @@ export default function NewBusinessPlanPage() {
     const [vision35Years, setVision35Years] = useState('')
 
     const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
-    const [operationalWorkflow, setOperationalWorkflow] = useState<WorkflowGraph | null>(null)
     const [saving, setSaving] = useState(false)
     const [autoSaving, setAutoSaving] = useState(false)
-    const [savingWorkflow, setSavingWorkflow] = useState(false)
     const [currentPlanId, setCurrentPlanId] = useState<string | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [canvas, setCanvas] = useState<CanvasData | null>(null)
@@ -60,7 +57,6 @@ export default function NewBusinessPlanPage() {
                 identified_operational_challenges: identifiedOperationalChallenges || null,
                 unique_selling_point: uniqueSellingPoint || null,
                 target_market: targetMarket || null,
-                operational_workflow: operationalWorkflow ? operationalWorkflow : null,
                 key_metrics: keyMetrics || null,
                 risks_and_plan_b: risksAndPlanB || null,
                 vision_3_5_years: vision35Years || null,
@@ -101,8 +97,6 @@ export default function NewBusinessPlanPage() {
             unique_selling_point: uniqueSellingPoint || null,
             target_market: targetMarket || null,
 
-            operational_workflow: operationalWorkflow ? operationalWorkflow : null,
-
             key_metrics: keyMetrics || null,
             risks_and_plan_b: risksAndPlanB || null,
             vision_3_5_years: vision35Years || null,
@@ -118,27 +112,6 @@ export default function NewBusinessPlanPage() {
         }
 
         router.push('/business-plan')
-    }
-
-    // Save only the workflow to the backend (for existing plans)
-    const saveWorkflow = async (workflow: WorkflowGraph) => {
-        if (!currentPlanId || !selectedOrgId) return
-        setSavingWorkflow(true)
-
-        const { error } = await supabase
-            .from('business_plan')
-            .update({
-                operational_workflow: workflow,
-                updated_at: new Date().toISOString(),
-            })
-            .eq('id', currentPlanId)
-            .eq('organisation_id', selectedOrgId)
-
-        setSavingWorkflow(false)
-
-        if (error) {
-            setError(error.message)
-        }
     }
 
     if (authLoading || orgLoading) return null
@@ -219,26 +192,6 @@ export default function NewBusinessPlanPage() {
                                     placeholder="Who are we serving?"
                                 />
                             </div>
-
-
-
-
-
-                            <div>
-                                <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                                <OperationalFlowEditor
-                                    value={operationalWorkflow}
-                                    onChange={setOperationalWorkflow}
-                                    height={480}
-                                    onSave={currentPlanId ? saveWorkflow : undefined}
-                                    saving={savingWorkflow}
-                                    businessPlanId={currentPlanId || undefined}
-                                />
-                            </div>
-
-
-
-
 
                             <div>
                                 <label className="block text-sm text-gray-300 mb-1">Key Metrics</label>

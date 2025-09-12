@@ -3,7 +3,6 @@
 import { FormEvent } from 'react'
 import StrategyCanvas from '@/components/StrategyCanvas'
 import type { CanvasData } from '@/components/StrategyCanvas'
-import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
 
 interface BusinessPlanFormProps {
     // Form data
@@ -25,8 +24,6 @@ interface BusinessPlanFormProps {
     setVision35Years: (value: string) => void
     prioritiesNext90Days: string
     setPrioritiesNext90Days: (value: string) => void
-    operationalWorkflow: WorkflowGraph | null
-    setOperationalWorkflow: (value: WorkflowGraph | null) => void
     canvas: CanvasData | null
     setCanvas: (value: CanvasData | null) => void
 
@@ -36,7 +33,6 @@ interface BusinessPlanFormProps {
 
     // State
     saving: boolean
-    savingWorkflow: boolean
     error: string | null
     success?: string | null
 
@@ -44,7 +40,6 @@ interface BusinessPlanFormProps {
     isEditing?: boolean
     orgName: string
     businessPlanId?: string
-    saveWorkflow?: (workflow: WorkflowGraph) => Promise<void>
     submitButtonText?: string
 }
 
@@ -58,18 +53,15 @@ export default function BusinessPlanForm({
     risksAndPlanB, setRisksAndPlanB,
     vision35Years, setVision35Years,
     prioritiesNext90Days, setPrioritiesNext90Days,
-    operationalWorkflow, setOperationalWorkflow,
     canvas, setCanvas,
     onSubmit,
     onCancel,
     saving,
-    savingWorkflow,
     error,
     success,
     isEditing = false,
     orgName,
     businessPlanId,
-    saveWorkflow,
     submitButtonText
 }: BusinessPlanFormProps) {
     return (
@@ -121,18 +113,6 @@ export default function BusinessPlanForm({
                     onChange={e => setTargetMarket(e.target.value)}
                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
                     placeholder="Who are we serving?"
-                />
-            </div>
-
-            <div>
-                <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                <OperationalFlowEditor
-                    value={operationalWorkflow}
-                    onChange={setOperationalWorkflow}
-                    height={480}
-                    onSave={saveWorkflow}
-                    saving={savingWorkflow}
-                    businessPlanId={businessPlanId}
                 />
             </div>
 

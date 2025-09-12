@@ -7,7 +7,6 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import StrategyCanvas from '@/components/StrategyCanvas'
 import type { CanvasData } from '@/components/StrategyCanvas'
-import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
 
 export default function BusinessPlanDetailPage() {
   const router = useRouter()
@@ -19,7 +18,6 @@ export default function BusinessPlanDetailPage() {
   const [plan, setPlan] = useState<any | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [savingWorkflow, setSavingWorkflow] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
 
@@ -38,7 +36,6 @@ export default function BusinessPlanDetailPage() {
   const [vision35Years, setVision35Years] = useState('')
 
   const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
-  const [operationalWorkflow, setOperationalWorkflow] = useState<WorkflowGraph | null>(null)
   // budget items are managed on the budget detail page
   const [canvas, setCanvas] = useState<CanvasData | null>(null)
 
@@ -82,19 +79,6 @@ export default function BusinessPlanDetailPage() {
         setCanvas((data as any)?.canvas ?? null)
 
         setPrioritiesNext90Days(data?.priorities_next_90_days ?? '')
-        // operational_workflow now stores a visual graph (nodes/edges)
-        if (data?.operational_workflow && typeof data.operational_workflow === 'object') {
-          setOperationalWorkflow(data.operational_workflow as WorkflowGraph)
-        } else if (typeof data?.operational_workflow === 'string') {
-          try {
-            const parsed = JSON.parse(data.operational_workflow)
-            setOperationalWorkflow(parsed as WorkflowGraph)
-          } catch {
-            setOperationalWorkflow(null)
-          }
-        } else {
-          setOperationalWorkflow(null)
-        }
       }
       setLoading(false)
     }
@@ -121,8 +105,6 @@ export default function BusinessPlanDetailPage() {
         unique_selling_point: uniqueSellingPoint || null,
         target_market: targetMarket || null,
 
-        operational_workflow: operationalWorkflow ? operationalWorkflow : null,
-
         key_metrics: keyMetrics || null,
         risks_and_plan_b: risksAndPlanB || null,
         vision_3_5_years: vision35Years || null,
@@ -141,34 +123,6 @@ export default function BusinessPlanDetailPage() {
     }
     // Close modal / navigate back to list after save
     router.push('/business-plan')
-  }
-
-  // Save only the workflow to the backend
-  const saveWorkflow = async (workflow: WorkflowGraph) => {
-    if (!id || !selectedOrgId) return
-    setSavingWorkflow(true)
-    setError(null)
-    setSuccess(null)
-
-    const { error } = await supabase
-      .from('business_plan')
-      .update({
-        operational_workflow: workflow,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .eq('organisation_id', selectedOrgId)
-
-    setSavingWorkflow(false)
-
-    if (error) {
-      setError(error.message)
-      return
-    }
-
-    setSuccess('Workflow saved successfully!')
-    // Clear success message after 3 seconds
-    setTimeout(() => setSuccess(null), 3000)
   }
 
   if (authLoading || orgLoading) return null
@@ -256,24 +210,6 @@ export default function BusinessPlanDetailPage() {
                     className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 min-h-[100px]"
                   />
                 </div>
-
-
-
-                <div>
-                  <label className="block text-sm text-gray-300 mb-1">Operational Workflow (visual)</label>
-                  <OperationalFlowEditor
-                    value={operationalWorkflow}
-                    onChange={setOperationalWorkflow}
-                    height={480}
-                    onSave={saveWorkflow}
-                    saving={savingWorkflow}
-                    businessPlanId={id}
-                  />
-                </div>
-
-
-
-
 
                 <div>
                   <label className="block text-sm text-gray-300 mb-1">Key Metrics</label>

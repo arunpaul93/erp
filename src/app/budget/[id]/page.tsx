@@ -4,7 +4,6 @@ import React, { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
-import OperationalFlowEditor, { type WorkflowGraph } from '@/components/OperationalFlowEditor'
 import {
   Chart as ChartJS,
   CategoryScale,

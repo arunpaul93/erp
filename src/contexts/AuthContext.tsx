@@ -43,6 +43,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setSession(session)
       setUser(session?.user ?? null)
       setLoading(false)
+
+      // Sync to server so middleware can read cookies and keep session across refresh
+      fetch('/api/auth/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: _event, session }),
+      }).catch(() => { })
     })
 
     return () => subscription.unsubscribe()
