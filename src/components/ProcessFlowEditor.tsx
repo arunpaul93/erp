@@ -85,14 +85,63 @@ const N8nStyleBezierEdge = ({
     markerEnd,
     selected
 }: EdgeProps) => {
-    const [edgePath, labelX, labelY] = getBezierPath({
-        sourceX,
-        sourceY,
-        sourcePosition,
-        targetX,
-        targetY,
-        targetPosition
-    })
+    // Check if this is a backward connection (target is to the left of source)
+    const isBackwardConnection = targetX < sourceX
+    
+    const createPath = () => {
+        if (isBackwardConnection) {
+            // Line with smooth Bezier curve bends for backward connections
+            const midY = sourceY + (targetY - sourceY) / 2
+            const offsetX = 30 // Distance to extend before bending
+            const curveLength = 15 // Length of Bezier curve transition
+            
+            // Calculate bend positions
+            const bend1X = sourceX + offsetX
+            const bend1Y = sourceY
+            const bend2X = sourceX + offsetX
+            const bend2Y = midY
+            const bend3X = targetX - offsetX
+            const bend3Y = midY
+            const bend4X = targetX - offsetX
+            const bend4Y = targetY
+            
+            // Direction helpers
+            const verticalDirection = midY > sourceY ? 1 : -1
+            const horizontalDirection = targetX < sourceX ? -1 : 1
+            const finalVerticalDirection = targetY > midY ? 1 : -1
+            
+            return `M ${sourceX},${sourceY} 
+                    L ${bend1X - curveLength},${bend1Y}
+                    C ${bend1X - curveLength/3},${bend1Y} ${bend1X},${bend1Y} ${bend1X},${bend1Y + curveLength * verticalDirection}
+                    L ${bend2X},${bend2Y - curveLength * verticalDirection}
+                    C ${bend2X},${bend2Y - curveLength/3 * verticalDirection} ${bend2X},${bend2Y} ${bend2X + curveLength * horizontalDirection},${bend2Y}
+                    L ${bend3X - curveLength * horizontalDirection},${bend3Y}
+                    C ${bend3X - curveLength/3 * horizontalDirection},${bend3Y} ${bend3X},${bend3Y} ${bend3X},${bend3Y + curveLength * finalVerticalDirection}
+                    L ${bend4X},${bend4Y - curveLength * finalVerticalDirection}
+                    C ${bend4X},${bend4Y - curveLength/3 * finalVerticalDirection} ${bend4X},${bend4Y} ${bend4X + curveLength},${bend4Y}
+                    L ${targetX},${targetY}`
+        } else {
+            // Curved path for forward connections
+            const deltaX = targetX - sourceX
+            const deltaY = targetY - sourceY
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+            
+            // Use a more conservative control point distance
+            // This creates gentler curves that won't bend sharply
+            const controlDistance = Math.min(Math.abs(deltaX) * 0.6, distance * 0.4, 150)
+            
+            // Ensure control points are always at least 50px away from handles
+            const sourceControlX = sourceX + Math.max(controlDistance, 50)
+            const targetControlX = targetX - Math.max(controlDistance, 50)
+            
+            return `M ${sourceX},${sourceY} C ${sourceControlX},${sourceY} ${targetControlX},${targetY} ${targetX},${targetY}`
+        }
+    }
+    
+    const edgePath = createPath()
+    const labelX = sourceX + (targetX - sourceX) / 2
+    const labelY = sourceY + (targetY - sourceY) / 2
+    
     const markerId = `arrow-${id}`
     return (
         <g>
@@ -147,25 +196,88 @@ const N8nStyleBezierEdge = ({
 
 // Custom Connection Line
 const N8nConnectionLine = ({ fromX, fromY, toX, toY }: any) => {
-    const [edgePath] = getBezierPath({
-        sourceX: fromX,
-        sourceY: fromY,
-        sourcePosition: Position.Right,
-        targetX: toX,
-        targetY: toY,
-        targetPosition: Position.Left,
-    })
+    // Check if this is a backward connection (target is to the left of source)
+    const isBackwardConnection = toX < fromX
+    
+    const createPath = () => {
+        if (isBackwardConnection) {
+            // Line with smooth Bezier curve bends for backward connections
+            const midY = fromY + (toY - fromY) / 2
+            const offsetX = 30 // Distance to extend before bending
+            const curveLength = 15 // Length of Bezier curve transition
+            
+            // Calculate bend positions
+            const bend1X = fromX + offsetX
+            const bend1Y = fromY
+            const bend2X = fromX + offsetX
+            const bend2Y = midY
+            const bend3X = toX - offsetX
+            const bend3Y = midY
+            const bend4X = toX - offsetX
+            const bend4Y = toY
+            
+            // Direction helpers
+            const verticalDirection = midY > fromY ? 1 : -1
+            const horizontalDirection = toX < fromX ? -1 : 1
+            const finalVerticalDirection = toY > midY ? 1 : -1
+            
+            return `M ${fromX},${fromY} 
+                    L ${bend1X - curveLength},${bend1Y}
+                    C ${bend1X - curveLength/3},${bend1Y} ${bend1X},${bend1Y} ${bend1X},${bend1Y + curveLength * verticalDirection}
+                    L ${bend2X},${bend2Y - curveLength * verticalDirection}
+                    C ${bend2X},${bend2Y - curveLength/3 * verticalDirection} ${bend2X},${bend2Y} ${bend2X + curveLength * horizontalDirection},${bend2Y}
+                    L ${bend3X - curveLength * horizontalDirection},${bend3Y}
+                    C ${bend3X - curveLength/3 * horizontalDirection},${bend3Y} ${bend3X},${bend3Y} ${bend3X},${bend3Y + curveLength * finalVerticalDirection}
+                    L ${bend4X},${bend4Y - curveLength * finalVerticalDirection}
+                    C ${bend4X},${bend4Y - curveLength/3 * finalVerticalDirection} ${bend4X},${bend4Y} ${bend4X + curveLength},${bend4Y}
+                    L ${toX},${toY}`
+        } else {
+            // Curved path for forward connections
+            const deltaX = toX - fromX
+            const deltaY = toY - fromY
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY)
+            
+            // Use a more conservative control point distance
+            // This creates gentler curves that won't bend sharply
+            const controlDistance = Math.min(Math.abs(deltaX) * 0.6, distance * 0.4, 150)
+            
+            // Ensure control points are always at least 50px away from handles
+            const sourceControlX = fromX + Math.max(controlDistance, 50)
+            const targetControlX = toX - Math.max(controlDistance, 50)
+            
+            return `M ${fromX},${fromY} C ${sourceControlX},${fromY} ${targetControlX},${toY} ${toX},${toY}`
+        }
+    }
+    
+    const edgePath = createPath()
+    const markerId = `connection-arrow`
 
     return (
         <g>
+            <defs>
+                <marker
+                    id={markerId}
+                    markerWidth={8}
+                    markerHeight={8}
+                    refX={4}
+                    refY={4}
+                    orient="auto"
+                    markerUnits="strokeWidth"
+                >
+                    <path
+                        d="M0,1 L0,7 L4,4 z"
+                        fill="#b1b1b7"
+                        stroke="#b1b1b7"
+                    />
+                </marker>
+            </defs>
             <path
                 fill="none"
-                stroke="#222"
+                stroke="#b1b1b7"
                 strokeWidth={2}
-                strokeDasharray="5,5"
                 d={edgePath}
+                markerEnd={`url(#${markerId})`}
             />
-            <circle cx={toX} cy={toY} fill="#222" r={3} stroke="#222" strokeWidth={1.5} />
         </g>
     )
 }
@@ -274,6 +386,8 @@ const ProcessFlowEditorInner = React.forwardRef<
     }, [])
 
     // Connection handlers for edge creation
+    const [connectingNodeId, setConnectingNodeId] = useState<string | null>(null)
+
     const onConnect = useCallback((connection: Connection) => {
         const newEdge: Edge = {
             id: uuidv4(),
@@ -286,14 +400,73 @@ const ProcessFlowEditorInner = React.forwardRef<
     }, [setEdges])
 
     const onConnectStart = useCallback((event: React.MouseEvent | React.TouchEvent, params: OnConnectStartParams) => {
-        // Optional: Handle connection start for visual feedback
+        // Store the source node ID when connection starts
+        setConnectingNodeId(params.nodeId || null)
         console.log('Connection started from:', params)
     }, [])
 
     const onConnectEnd = useCallback((event: MouseEvent | TouchEvent) => {
-        // Optional: Handle connection end for canvas interactions
-        console.log('Connection ended')
-    }, [])
+        // Check if connection ended in empty space (not on a node)
+        const target = event.target as Element
+        
+        // If the connection didn't end on a valid target and we have a source node, create a new node
+        if (target && !target.closest('.react-flow__node') && !target.closest('.react-flow__handle') && connectingNodeId) {
+            // Get the mouse/touch position
+            const clientX = 'clientX' in event ? event.clientX : event.touches?.[0]?.clientX || 0
+            const clientY = 'clientY' in event ? event.clientY : event.touches?.[0]?.clientY || 0
+            
+            // Convert screen coordinates to flow coordinates
+            const containerRect = containerRef.current?.getBoundingClientRect()
+            if (containerRect) {
+                const relativeX = clientX - containerRect.left
+                const relativeY = clientY - containerRect.top
+                const flowPosition = reactFlowInstance.screenToFlowPosition({ x: relativeX, y: relativeY })
+                
+                // Create new node at the drop position
+                const newNodeId = uuidv4()
+                const newNode: Node = {
+                    id: newNodeId,
+                    type: 'processStep',
+                    position: flowPosition,
+                    data: {
+                        label: 'New Step',
+                        description: '',
+                        stepData: {
+                            id: newNodeId,
+                            organisation_id: selectedOrgId,
+                            name: 'New Step',
+                            description: '',
+                            metadata: { position: flowPosition }
+                        }
+                    }
+                }
+                
+                // Add the new node
+                setNodes(nds => [...nds, newNode])
+                
+                // Create edge from source to new node using stored connecting node ID
+                const newEdge: Edge = {
+                    id: uuidv4(),
+                    source: connectingNodeId,
+                    target: newNodeId,
+                    type: 'n8n-bezier',
+                    data: { label: '' },
+                }
+                
+                setEdges(eds => addEdge(newEdge, eds))
+                
+                // Open editing for the new node
+                setEditingNode({
+                    id: newNodeId,
+                    name: 'New Step',
+                    description: ''
+                })
+            }
+        }
+        
+        // Clear the connecting node ID
+        setConnectingNodeId(null)
+    }, [reactFlowInstance, selectedOrgId, setNodes, setEdges, connectingNodeId])
 
     // Edge selection and interaction handlers
     const onEdgeClick = useCallback((event: React.MouseEvent, edge: Edge) => {
