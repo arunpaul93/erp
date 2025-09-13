@@ -73,11 +73,11 @@ function ProcessStepNode({ data, selected }: NodeProps) {
         return (
             <div
                 className={`rounded-lg border-2 ${selected ? 'border-yellow-400' : 'border-gray-600'} hover:border-yellow-400 transition-colors relative pointer-events-none`}
-                style={{ width: size.width, height: size.height, overflow: 'visible', background: 'none', zIndex: 0 }}
+                style={{ width: size.width, height: size.height, overflow: 'visible', background: 'none', zIndex: -1 }}
             >
                 {/* Left target/source overlapped (show as single dot) */}
-                <Handle id="left-target" type="target" position={Position.Left} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 10 }} />
-                <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 11 }} />
+                <Handle id="left-target" type="target" position={Position.Left} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 12 }} />
+                <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 13 }} />
                     <div className="absolute inset-0 flex flex-col pointer-events-none">
                         <div
                             className="px-3 py-2 text-center pointer-events-auto"
@@ -125,8 +125,8 @@ function ProcessStepNode({ data, selected }: NodeProps) {
                     </div>
                 </div>
                 {/* Right target/source overlapped */}
-                <Handle id="right-target" type="target" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 10 }} />
-                <Handle id="right-source" type="source" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 11 }} />
+                <Handle id="right-target" type="target" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 12 }} />
+                <Handle id="right-source" type="source" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 13 }} />
             </div>
         )
     }
@@ -251,15 +251,16 @@ const N8nStyleBezierEdge = ({
                 d={edgePath}
                 markerEnd={`url(#${markerId})`}
             />
-            {/* Invisible thicker stroke for easier clicking; keep class so RF delegates events */}
+            {/* Invisible thicker stroke for easier clicking; use RF interaction class for event delegation */}
             <path
                 data-id={id}
-                className="react-flow__edge-path"
+                className="react-flow__edge-interaction"
                 style={{
                     pointerEvents: 'stroke',
-                    strokeWidth: 14,
+                    strokeWidth: 16,
                     stroke: 'transparent',
-                    fill: 'none'
+                    fill: 'none',
+                    cursor: 'pointer'
                 }}
                 d={edgePath}
             />
@@ -917,6 +918,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             // Update parent and add child
             setNodes(nds => nds.map(n => n.id === parentNodeId ? ({
                 ...n,
+                selectable: false,
                 data: { ...n.data, stepData: updatedParentStepData }
             }) : n).concat(childNode))
             // Create linking edge depending on options
@@ -1021,6 +1023,10 @@ const ProcessFlowEditorInner = React.forwardRef<
                 x: (step.metadata?.position?.x) || (index % 3) * 450 + 100,
                 y: (step.metadata?.position?.y) || Math.floor(index / 3) * 320 + 100,
             },
+            // Parent containers should not intercept pointer events so edges are clickable
+            style: step.metadata?.hasSubProcesses ? { pointerEvents: 'none' } : undefined,
+            draggable: step.metadata?.hasSubProcesses ? false : true,
+            selectable: step.metadata?.hasSubProcesses ? false : true,
             // leave pointer events enabled on RF node wrapper for selection
             data: {
                 label: step.name,
@@ -1030,21 +1036,65 @@ const ProcessFlowEditorInner = React.forwardRef<
         }))
 
         // Parent nodes get callbacks; child nodes will be added below
-    const parentNodesWithData = reactFlowNodes.map(n => ({
+        const parentNodesWithData = reactFlowNodes.map(n => ({
             ...n,
             data: {
                 ...n.data,
                 onResize: ({ width, height }: { width: number; height: number }) => {
-                    setNodes(nds => nds.map(nn => nn.id === n.id ? ({
-                        ...nn,
-                        style: { ...(nn.style || {}), width, height },
-                        data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: { ...(nn.data.stepData?.metadata || {}), size: { width, height } } } }
-                    }) : nn))
+                    const MARGIN = 16; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
+                    setNodes(nds => {
+                        // Update parent size
+                        const updated = nds.map(nn => nn.id === n.id ? ({
+                            ...nn,
+                            style: { ...(nn.style || {}), width, height },
+                            data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: { ...(nn.data.stepData?.metadata || {}), size: { width, height } } } }
+                        }) : nn)
+                        // Clamp children inside new bounds
+                        return updated.map(nn => {
+                            if (nn.parentNode !== n.id) return nn
+                            const maxX = Math.max(MARGIN, width - CHILD_W - MARGIN)
+                            const maxY = Math.max(HEADER, height - CHILD_H - MARGIN)
+                            const nx = Math.min(Math.max(nn.position.x, MARGIN), maxX)
+                            const ny = Math.min(Math.max(nn.position.y, HEADER), maxY)
+                            if (nx === nn.position.x && ny === nn.position.y) return nn
+                            return {
+                                ...nn,
+                                position: { x: nx, y: ny },
+                                data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: { ...(nn.data.stepData?.metadata || {}), position: { x: nx, y: ny } } } }
+                            }
+                        })
+                    })
                 },
                 onResizeEnd: ({ width, height }: { width: number; height: number }) => {
+                    const MARGIN = 16; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
+                    // Persist parent size
                     void supabase.from('process_step').update({
                         metadata: { ...(n.data.stepData?.metadata || {}), size: { width, height } }
                     }).eq('id', n.id).then(() => {}, (err) => console.error(err))
+
+                    // Clamp and persist child positions if changed
+                    const toPersist: { id: string; x: number; y: number; metadata: any }[] = []
+                    setNodes(nds => nds.map(nn => {
+                        if (nn.parentNode !== n.id) return nn
+                        const maxX = Math.max(MARGIN, width - CHILD_W - MARGIN)
+                        const maxY = Math.max(HEADER, height - CHILD_H - MARGIN)
+                        const nx = Math.min(Math.max(nn.position.x, MARGIN), maxX)
+                        const ny = Math.min(Math.max(nn.position.y, HEADER), maxY)
+                        if (nx === nn.position.x && ny === nn.position.y) return nn
+                        const newMeta = { ...(nn.data.stepData?.metadata || {}), position: { x: nx, y: ny } }
+                        toPersist.push({ id: nn.id, x: nx, y: ny, metadata: newMeta })
+                        return { ...nn, position: { x: nx, y: ny }, data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: newMeta } } }
+                    }))
+                    // Persist asynchronously
+                    void (async () => {
+                        for (const c of toPersist) {
+                            try {
+                                await supabase.from('process_step').update({ metadata: c.metadata }).eq('id', c.id)
+                            } catch (e) {
+                                console.error('Failed to persist clamped child position', c.id, e)
+                            }
+                        }
+                    })()
         }
             }
         }))
@@ -1420,14 +1470,14 @@ const ProcessFlowEditorInner = React.forwardRef<
     // Handle node click for editing
     const onNodeClick = useCallback((event: React.MouseEvent, node: Node) => {
         event.stopPropagation()
+        // If this is a parent/container node, ignore click (non-selectable walls)
+        const isParent = !!(node as any).data?.stepData?.metadata?.hasSubProcesses
+        if (isParent) {
+            return
+        }
         setSelectedNode(node)
         closeContextMenu()
-        
-        setEditingNode({
-            id: node.id,
-            name: node.data.label,
-            description: node.data.description || ''
-        })
+        setEditingNode({ id: node.id, name: node.data.label, description: node.data.description || '' })
     }, [closeContextMenu])
 
     // Delete element from context menu
