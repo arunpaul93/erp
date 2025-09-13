@@ -119,7 +119,7 @@ export default function ProcessFlowPage() {
                     className=""
                     hideToolbar={true}
                     layoutSpacing={{ x: 60, y: hierarchyGap }}
-                    
+
                     onSave={() => {
                         // Optional: Add notification or callback after save
                         console.log('Process flow saved successfully')
