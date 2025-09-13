@@ -8,10 +8,11 @@ import { useEffect, useState, useRef } from 'react'
 
 export default function ProcessFlowPage() {
     const { user, loading } = useAuth()
-    const { selectedOrgId, selectedOrg } = useOrg()
+    const { selectedOrgId } = useOrg()
     const router = useRouter()
     const [windowHeight, setWindowHeight] = useState(800) // Default height
     const [isSaving, setIsSaving] = useState(false)
+    const [hierarchyGap, setHierarchyGap] = useState<number>(80)
     const editorRef = useRef<any>(null)
 
     useEffect(() => {
@@ -79,11 +80,26 @@ export default function ProcessFlowPage() {
                 <div className="flex items-center justify-between">
                     <div>
                         <h1 className="text-xl font-bold text-white">Process Flow Editor</h1>
-                        <p className="text-sm text-gray-400 mt-1">
-                            {selectedOrg?.name || 'Your organization'} - Design and manage process flows
-                        </p>
+                        <p className="text-sm text-gray-400 mt-1">Design and manage process flows</p>
                     </div>
-                    <div>
+                    <div className="flex items-center gap-3">
+                        <div className="hidden md:flex items-center gap-4 text-sm text-gray-300">
+                            {/* direction fixed to left-to-right */}
+                            <div className="flex items-center gap-2">
+                                <span>hierarchy</span>
+                                <input
+                                    type="number"
+                                    className="w-24 bg-gray-800 border border-gray-700 rounded px-2 py-1"
+                                    value={hierarchyGap}
+                                    onChange={(e) => setHierarchyGap(parseInt(e.target.value || '0', 10))}
+                                    min={20}
+                                    step={10}
+                                />
+                            </div>
+                            {/* dynamic layout removed */}
+                            {/* grid option selector removed */}
+                        </div>
+                        {/* Auto Layout removed */}
                         <button
                             onClick={handleSave}
                             disabled={isSaving}
@@ -102,6 +118,8 @@ export default function ProcessFlowPage() {
                     height={windowHeight - 80} // Full height minus header
                     className=""
                     hideToolbar={true}
+                    layoutSpacing={{ x: 60, y: hierarchyGap }}
+                    
                     onSave={() => {
                         // Optional: Add notification or callback after save
                         console.log('Process flow saved successfully')

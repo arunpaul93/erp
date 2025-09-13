@@ -80,7 +80,7 @@ function ProcessStepNode({ data, selected }: NodeProps) {
                 <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 13 }} />
                     <div className="absolute inset-0 flex flex-col pointer-events-none">
                         <div
-                            className="px-3 py-2 text-center pointer-events-auto"
+                            className="px-3 py-2 text-center pointer-events-auto rf-drag-handle cursor-move select-none"
                         >
                             <div className="font-medium text-gray-100 leading-tight truncate">{data.label}</div>
                         {data.description && (
@@ -385,6 +385,10 @@ interface ProcessFlowEditorProps {
     className?: string
     onSave?: () => void
     hideToolbar?: boolean
+    layoutSpacing?: { x: number; y: number }
+    // Grid spacing for background grid
+    gridGap?: number
+    // When provided, controls spacing for clamps/margins, not for auto layout
     ref?: React.Ref<{ saveProcessFlow: () => Promise<void> }>
 }
 
@@ -395,7 +399,9 @@ const ProcessFlowEditorInner = React.forwardRef<
     height = 600,
     className = '',
     onSave,
-    hideToolbar = false
+    hideToolbar = false,
+    layoutSpacing = { x: 60, y: 80 },
+    gridGap = 16
 }, ref) => {
     const { user } = useAuth()
     const { selectedOrgId } = useOrg()
@@ -408,7 +414,9 @@ const ProcessFlowEditorInner = React.forwardRef<
     const [organisationId] = useState<string>(selectedOrgId || 'c6b0261b-690f-4c43-9b79-3426a7b97804') // Use actual org or fallback
         // Recompute parent node sizes based on child bounds
     const recomputeParentSizes = useCallback((currentNodes: Node[]): Node[] => {
-            const UPDATED_PADDING = { x: 24, y: 64 } // side + header
+            // Apply hierarchy spacing as inner margin to walls; keep header reserved at top
+            const INNER_MARGIN = layoutSpacing.y
+            const UPDATED_PADDING = { x: INNER_MARGIN, y: INNER_MARGIN } // right/bottom margins; header is handled by child clamps
             const FALLBACK_CHILD_SIZE = { w: 150, h: 60 }
 
             const childrenByParent: Record<string, Node[]> = {}
@@ -428,9 +436,9 @@ const ProcessFlowEditorInner = React.forwardRef<
         if (kids.length === 0) {
                     const defaultWidth = 420
                     const defaultHeight = 300
-                    return {
+            return {
                         ...node,
-            style: { ...(node.style || {}), width: defaultWidth, height: defaultHeight, pointerEvents: 'none' },
+        style: { ...(node.style || {}), width: defaultWidth, height: defaultHeight },
                         data: {
                             ...node.data,
                             stepData: {
@@ -449,6 +457,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     maxY = Math.max(maxY, c.position.y + ch)
                 })
 
+                // Ensure a right and bottom margin equals hierarchy gap; top header + top margin comes from child y positions
                 const contentMinWidth = Math.max(420, maxX + UPDATED_PADDING.x)
                 const contentMinHeight = Math.max(300, maxY + UPDATED_PADDING.y)
                 const curSize = (node as any).data?.stepData?.metadata?.size || {}
@@ -458,7 +467,7 @@ const ProcessFlowEditorInner = React.forwardRef<
 
                 return {
                     ...node,
-                    style: { ...(node.style || {}), width: desiredWidth, height: desiredHeight, pointerEvents: 'none' },
+                    style: { ...(node.style || {}), width: desiredWidth, height: desiredHeight },
                     data: {
                         ...node.data,
                         stepData: {
@@ -468,7 +477,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     }
                 }
             })
-        }, [])
+    }, [layoutSpacing])
 
         // Effect: whenever nodes change, recompute parent sizes
         useEffect(() => {
@@ -508,6 +517,8 @@ const ProcessFlowEditorInner = React.forwardRef<
     const subConnectRef = useRef<null | { parentId: string; fromSubId: string; side: 'left'|'right'; preview?: { x: number; y: number } }>(null)
     // Track if a real connection completed to avoid accidental creation on onConnectEnd
     const didConnectRef = useRef<boolean>(false)
+
+    // Auto layout removed
 
     // Update embedded sub-step position and persist (debounced)
     const updateEmbeddedSubStep = useCallback((parentId: string, subId: string, pos: { x: number; y: number }) => {
@@ -696,7 +707,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             type: 'n8n-bezier',
             sourceHandle,
             targetHandle,
-            data: { label: '' },
+            data: { label: '', edgeData: { metadata: { sourceHandle, targetHandle } } },
         }
 
         // Save to database with handle metadata
@@ -725,14 +736,17 @@ const ProcessFlowEditorInner = React.forwardRef<
         // Detect if connecting from the specific parent left-source handle (for sub-process creation)
         const target = event.target as Element
         const isParentLeftSource = target.closest('.parent-left-source') !== null
-        setConnectingFromLeft(isParentLeftSource)
-        // Detect child right handle start using handleId
+        // Also allow top-level nodes' left-source handle to trigger (first child case)
         const node = nodes.find(n => n.id === (params.nodeId || ''))
         const sourceIsChild = !!node?.parentNode
+        const handleId = (params as any).handleId
+        const isLeftHandle = handleId === 'left-source'
+        setConnectingFromLeft(Boolean(isParentLeftSource || (isLeftHandle && !sourceIsChild)))
+        // Detect child right handle start using handleId
         const isRightHandle = (params as any).handleId === 'right-source'
         setConnectingFromChildRight(Boolean(sourceIsChild && isRightHandle))
         
-        console.log('Connection started from:', params, 'from parent-left-source:', isParentLeftSource)
+        console.log('Connection started from:', params, 'from parent-left-source:', isParentLeftSource || (isLeftHandle && !sourceIsChild))
     }, [nodes])
 
     const onConnectEnd = useCallback((event: MouseEvent | TouchEvent) => {
@@ -819,7 +833,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                 from_step_id: sourceNodeId,
                 to_step_id: newNodeId,
                 label: '',
-                metadata: { sourceHandle: 'right-source', targetHandle: 'left-target' }
+                metadata: { sourceHandle: 'right-source', targetHandle: 'left-target', points: [] }
             }
             
             // Save edge to database
@@ -855,7 +869,8 @@ const ProcessFlowEditorInner = React.forwardRef<
             // Determine current size or defaults
             // @ts-ignore
             const parentSize = parentNode.data?.stepData?.metadata?.size || { width: 420, height: 300 }
-        const PADDING = { x: 24, y: 64 } // match recompute func header + side
+    // Use hierarchy gap as inner margin from walls; header handled separately
+    const PADDING = { x: layoutSpacing.y, y: 64 }
 
             const updatedParentStepData: ProcessStepData = {
                 ...parentNode.data.stepData,
@@ -875,7 +890,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             
             // Ensure the child is positioned within the parent's content area (after header)
         const headerHeight = PADDING.y
-        const margin = 16
+    const margin = layoutSpacing.y
         const childWidth = 140
         const childHeight = 70
             
@@ -931,7 +946,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     from_step_id: options.connectFromChildId,
                     to_step_id: subProcessId,
                     label: '',
-                    metadata: { sourceHandle: 'right-source', targetHandle: 'left-target' }
+                    metadata: { sourceHandle: 'right-source', targetHandle: 'left-target', points: [] }
                 }
                 await saveProcessEdge(edgeData)
                 const rfEdge: Edge = {
@@ -953,7 +968,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     from_step_id: parentNodeId,
                     to_step_id: subProcessId,
                     label: '',
-                    metadata: { sourceHandle: 'left-source', targetHandle: 'left-target' }
+                    metadata: { sourceHandle: 'left-source', targetHandle: 'left-target', points: [] }
                 }
                 await saveProcessEdge(edgeData)
                 const rfEdge: Edge = {
@@ -1025,8 +1040,9 @@ const ProcessFlowEditorInner = React.forwardRef<
             },
             // Parent containers should not intercept pointer events so edges are clickable
             style: step.metadata?.hasSubProcesses ? { pointerEvents: 'none' } : undefined,
-            draggable: step.metadata?.hasSubProcesses ? false : true,
+            draggable: true,
             selectable: step.metadata?.hasSubProcesses ? false : true,
+            dragHandle: step.metadata?.hasSubProcesses ? '.rf-drag-handle' : undefined,
             // leave pointer events enabled on RF node wrapper for selection
             data: {
                 label: step.name,
@@ -1041,7 +1057,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             data: {
                 ...n.data,
                 onResize: ({ width, height }: { width: number; height: number }) => {
-                    const MARGIN = 16; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
+                    const MARGIN = layoutSpacing.y; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
                     setNodes(nds => {
                         // Update parent size
                         const updated = nds.map(nn => nn.id === n.id ? ({
@@ -1066,7 +1082,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     })
                 },
                 onResizeEnd: ({ width, height }: { width: number; height: number }) => {
-                    const MARGIN = 16; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
+                    const MARGIN = layoutSpacing.y; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
                     // Persist parent size
                     void supabase.from('process_step').update({
                         metadata: { ...(n.data.stepData?.metadata || {}), size: { width, height } }
@@ -1117,7 +1133,7 @@ const ProcessFlowEditorInner = React.forwardRef<
         const childNodes: Node[] = validSubProcessSteps.map(s => {
             const parentId = s.parent_step_id!
             const size = parentSizeMap.get(parentId) || { width: 420, height: 300 }
-            const margin = 16
+            const margin = layoutSpacing.y
             const header = 64
             const childW = 150
             const childH = 60
@@ -1168,7 +1184,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     }
                 }
 
-                return ({
+        return ({
                     id: edge.id,
                     source: edge.from_step_id,
                     target: edge.to_step_id,
@@ -1237,9 +1253,15 @@ const ProcessFlowEditorInner = React.forwardRef<
         setError(null)
 
     try {
-            // Save node positions and data
+            // Save node positions and data (including parent sizes when available)
             for (const node of nodes) {
                 const existingStep = originalSteps.find(s => s.id === node.id)
+                // Determine size if present (parents) either from metadata or current style
+                const metaSize = (node as any).data?.stepData?.metadata?.size as { width: number; height: number } | undefined
+                const styleW = (node as any).style?.width as number | undefined
+                const styleH = (node as any).style?.height as number | undefined
+                const styleSize = styleW && styleH ? { width: styleW, height: styleH } : undefined
+                const sizeToSave = metaSize || styleSize
                 if (existingStep) {
                     // Update existing step with position
                     const { error: updateError } = await supabase
@@ -1249,6 +1271,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                             description: node.data.description,
                             metadata: {
                                 ...existingStep.metadata,
+                                ...(sizeToSave ? { size: sizeToSave } : {}),
                                 position: { x: node.position.x, y: node.position.y }
                             }
                         })
@@ -1265,6 +1288,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                             name: node.data.label,
                             description: node.data.description,
                             metadata: {
+                                ...(sizeToSave ? { size: sizeToSave } : {}),
                                 position: { x: node.position.x, y: node.position.y }
                             }
                         })
@@ -1286,7 +1310,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                             label: edge.data?.label || null,
                             metadata: edge.data?.edgeData?.metadata || {
                                 sourceHandle: edge.sourceHandle,
-                                targetHandle: edge.targetHandle,
+                                targetHandle: edge.targetHandle
                             }
                         })
                         .eq('id', edge.id)
@@ -1296,7 +1320,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     // Insert new edge
                     const { error: insertError } = await supabase
                         .from('process_flow_edge')
-                        .insert({
+            .insert({
                             id: edge.id,
                             organisation_id: selectedOrgId,
                             from_step_id: edge.source,
@@ -1304,7 +1328,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                             label: edge.data?.label || null,
                             metadata: {
                                 sourceHandle: edge.sourceHandle,
-                                targetHandle: edge.targetHandle,
+                                targetHandle: edge.targetHandle
                             }
                         })
 
@@ -1570,6 +1594,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                 <div className="flex items-center justify-between p-3 border-b border-gray-800 bg-gray-900">
                     <h3 className="text-lg font-medium text-yellow-400">Process Flow Editor</h3>
                     <div className="flex items-center space-x-3">
+                        {/* Layout controls removed */}
                         {error && (
                             <span className="text-sm text-red-400 bg-red-900/50 px-2 py-1 rounded">
                                 {error}
@@ -1580,6 +1605,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                                 Saved {lastSaved.toLocaleTimeString()}
                             </span>
                         )}
+                        {/* Auto Layout removed */}
                         <button
                             onClick={addNewNode}
                             className="px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm rounded"
@@ -1656,7 +1682,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     className="bg-gray-900"
                 >
                     <Controls position="bottom-left" className="bg-gray-800 border-gray-700" />
-                    <Background color="#374151" gap={16} />
+                    <Background color="#374151" gap={gridGap} />
                 </ReactFlow>
 
                 {/* Floating Add Node button */}
