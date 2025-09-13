@@ -73,22 +73,21 @@ function ProcessStepNode({ data, selected }: NodeProps) {
         return (
             <div
                 className={`rounded-lg border-2 ${selected ? 'border-yellow-400' : 'border-gray-600'} hover:border-yellow-400 transition-colors relative pointer-events-none`}
-                style={{ width: size.width, height: size.height, overflow: 'visible', background: 'none', zIndex: -1 }}
+                style={{ width: size.width, height: size.height, overflow: 'visible', background: 'none', zIndex: 0 }}
             >
                 {/* Left target/source overlapped (show as single dot) */}
-                <Handle id="left-target" type="target" position={Position.Left} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 1 }} />
-                <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 2 }} />
+                <Handle id="left-target" type="target" position={Position.Left} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 10 }} />
+                <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 11 }} />
                     <div className="absolute inset-0 flex flex-col pointer-events-none">
-                    <div
-                        className="px-3 py-2 border-b border-gray-700 bg-gray-900/90 backdrop-blur text-center pointer-events-auto"
-                        onMouseDown={(e) => { e.stopPropagation(); data.onSelectNode?.(data.stepData?.id) }}
-                    >
-                        <div className="font-medium text-gray-100 leading-tight truncate">{data.label}</div>
+                        <div
+                            className="px-3 py-2 text-center pointer-events-auto"
+                        >
+                            <div className="font-medium text-gray-100 leading-tight truncate">{data.label}</div>
                         {data.description && (
-                            <div className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">{data.description}</div>
+                                <div className="text-[10px] text-gray-400 mt-0.5 line-clamp-2">{data.description}</div>
                         )}
                     </div>
-                    <div className="flex-1 relative nodrag nopan nowheel pointer-events-none">
+                    <div className="flex-1 relative nodrag nopan nowheel pointer-events-none" style={{ zIndex: 0 }}>
                         {/* Child nodes render here via React Flow; no embedded DOM needed */}
                         {/* Resize handle (bottom-right) */}
                         <div
@@ -126,8 +125,8 @@ function ProcessStepNode({ data, selected }: NodeProps) {
                     </div>
                 </div>
                 {/* Right target/source overlapped */}
-                <Handle id="right-target" type="target" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 1 }} />
-                <Handle id="right-source" type="source" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 2 }} />
+                <Handle id="right-target" type="target" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 10 }} />
+                <Handle id="right-source" type="source" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 11 }} />
             </div>
         )
     }
@@ -239,22 +238,26 @@ const N8nStyleBezierEdge = ({
             </defs>
             <path
                 id={id}
+                data-id={id}
                 style={{
                     ...style,
                     pointerEvents: 'visibleStroke',
                     strokeWidth: selected ? 5 : 4,
                     stroke: selected ? '#ff6b6b' : '#b1b1b7',
-                    fill: 'none'
+                    fill: 'none',
+                    zIndex: 5
                 }}
                 className="react-flow__edge-path"
                 d={edgePath}
                 markerEnd={`url(#${markerId})`}
             />
-            {/* Invisible thicker stroke for easier clicking */}
+            {/* Invisible thicker stroke for easier clicking; keep class so RF delegates events */}
             <path
+                data-id={id}
+                className="react-flow__edge-path"
                 style={{
-                    pointerEvents: 'visibleStroke',
-                    strokeWidth: 12,
+                    pointerEvents: 'stroke',
+                    strokeWidth: 14,
                     stroke: 'transparent',
                     fill: 'none'
                 }}
@@ -1027,7 +1030,7 @@ const ProcessFlowEditorInner = React.forwardRef<
         }))
 
         // Parent nodes get callbacks; child nodes will be added below
-        const parentNodesWithData = reactFlowNodes.map(n => ({
+    const parentNodesWithData = reactFlowNodes.map(n => ({
             ...n,
             data: {
                 ...n.data,
@@ -1042,14 +1045,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                     void supabase.from('process_step').update({
                         metadata: { ...(n.data.stepData?.metadata || {}), size: { width, height } }
                     }).eq('id', n.id).then(() => {}, (err) => console.error(err))
-                },
-                onSelectNode: (id: string) => {
-                    // Programmatically select the RF node
-                    setSelectedNode(null)
-                    setTimeout(() => {
-                        setSelectedNode({ ...(n as any) })
-                    }, 0)
-                }
+        }
             }
         }))
 
