@@ -1,1056 +1,826 @@
 'use client'
 
-import { useCallback, useState, useEffect, useRef } from 'react'
-import {
-    ReactFlow,
-    Controls,
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ReactFlow, {
     Background,
-    BackgroundVariant,
-    useNodesState,
-    useEdgesState,
-    addEdge,
-    Connection,
+    Controls,
     Edge,
     Node,
+    ReactFlowProvider,
     Handle,
     Position,
+    addEdge,
+    type OnConnect,
+    type OnConnectEnd,
+    type OnConnectStart,
+    type NodeProps,
     useReactFlow,
-    ReactFlowProvider,
-    OnConnectStart,
-} from '@xyflow/react'
-import '@xyflow/react/dist/style.css'
-import { hierarchy, tree, HierarchyNode } from 'd3-hierarchy'
+    useEdgesState,
+    useNodesState,
+    SelectionMode,
+} from 'reactflow'
+import 'reactflow/dist/style.css'
+import { hierarchy, tree } from 'd3-hierarchy'
+import { supabase } from '@/lib/supabase'
+import { useOrg } from '@/contexts/OrgContext'
+import EditableLabelEdge from '@/components/flow/EditableLabelEdge'
 
 type D3Node = { id: string; children?: D3Node[] }
+type LayoutCfg = {
+    baseX: number
+    baseY: number
+    colGap: number
+    rowPadding: number // vertical padding between nodes within a column
+}
 
-// Custom node components with side handles
-function CustomNode({ id, data, isConnectable }: { id: string; data: any; isConnectable: boolean }) {
+// Custom node with side handles (left target, right source) and inline edit on double click
+function SideNode(props: NodeProps<{ label?: string }>) {
+    const { id, data, selected } = props
     const [isEditing, setIsEditing] = useState(false)
-    const [editText, setEditText] = useState(data.label || 'Node')
+    const [value, setValue] = useState<string>(data?.label ?? 'Step')
+    const taRef = useRef<HTMLTextAreaElement | null>(null)
+    const [editWidth, setEditWidth] = useState<number>(160)
 
-    const handleDoubleClick = (e: React.MouseEvent) => {
-        e.stopPropagation()
+    const measureTextWidth = useCallback((text: string) => {
+        // approximate measurement using canvas 2D context to match text-sm
+        const canvas = (measureTextWidth as any)._c || document.createElement('canvas')
+        ;(measureTextWidth as any)._c = canvas
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return Math.max(128, text.length * 8)
+        // Tailwind text-sm ~ 0.875rem (~14px). Use a common sans-serif stack
+        ctx.font = '14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Noto Sans", "Liberation Sans", sans-serif'
+        const lines = (text || '').split('\n')
+        let max = 0
+        for (const line of lines) {
+            const width = ctx.measureText(line.length ? line : ' ').width
+            if (width > max) max = width
+        }
+        // add inner padding to match px-1 and container px-3
+        const padding = 8 /* textarea px-1 left+right ~ 8px */ + 24 /* container px-3 ~ 24px */
+        // clamp to reasonable bounds
+        return Math.min(Math.max(128, Math.ceil(max + padding)), 640)
+    }, [])
+
+    useEffect(() => {
+        if (!isEditing) return
+        setEditWidth(measureTextWidth(value))
+    }, [isEditing, value, measureTextWidth])
+
+    const startEdit = useCallback(() => {
+        setValue(data?.label ?? 'Step')
         setIsEditing(true)
-        setEditText(data.label || 'Node')
-    }
+    }, [data?.label])
 
-    const handleSave = () => {
-        // Update the node data through React Flow's node update mechanism
-        const event = new CustomEvent('updateNodeLabel', {
-            detail: { nodeId: id, newLabel: editText }
-        })
+    const commit = useCallback((next: string) => {
+        const event = new CustomEvent('updateNodeLabel', { detail: { nodeId: id, newLabel: next } })
         window.dispatchEvent(event)
         setIsEditing(false)
-    }
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Escape') {
-            setEditText(data.label || 'Node')
-            setIsEditing(false)
-        }
-        // Don't handle Enter - let it create new lines naturally
-    }
+    }, [id])
 
-    // Auto-resize function for textarea
-    const handleTextareaResize = (textarea: HTMLTextAreaElement) => {
-        textarea.style.height = 'auto'
-        textarea.style.height = textarea.scrollHeight + 'px'
-    }
+    const cancel = useCallback(() => setIsEditing(false), [])
+
+    // Ask the graph to enter edit mode for this node (so auto-layout pauses)
+    const requestEdit = useCallback(() => {
+        const evt = new CustomEvent('startNodeEdit', { detail: { nodeId: id } })
+        window.dispatchEvent(evt)
+    }, [id])
+
+    // Listen for external edit trigger
+    useEffect(() => {
+        const handler = (e: Event) => {
+            const detail = (e as CustomEvent).detail as { nodeId: string }
+            console.log('Edit event received for node:', detail?.nodeId, 'current node:', id)
+            if (detail?.nodeId === id) {
+                console.log('Starting edit for node:', id)
+                startEdit()
+            }
+        }
+        window.addEventListener('startNodeEdit', handler as any)
+        return () => window.removeEventListener('startNodeEdit', handler as any)
+    }, [id, startEdit])
 
     return (
-        <div className="px-4 py-2 shadow-md rounded-md bg-white border-2 border-stone-400 min-w-[120px]">
-            <Handle
-                type="target"
-                position={Position.Left}
-                style={{ background: '#555' }}
-                isConnectable={isConnectable}
-            />
-            <div className="text-center text-sm font-medium text-gray-700">
-                {isEditing ? (
-                    <textarea
-                        value={editText}
-                        onChange={(e) => setEditText(e.target.value)}
-                        onBlur={handleSave}
-                        onKeyDown={handleKeyDown}
-                        className="w-full text-center bg-transparent border-none outline-none text-sm font-medium text-gray-700 resize-none overflow-hidden min-h-[1.2em]"
-                        autoFocus
-                        ref={(textarea) => {
-                            if (textarea) {
-                                // Don't select all text, just position cursor at end
-                                setTimeout(() => {
-                                    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
-                                    handleTextareaResize(textarea)
-                                }, 0)
-                            }
-                        }}
-                        rows={1}
-                        style={{
-                            height: 'auto',
-                            minHeight: '1.2em',
-                            lineHeight: '1.2em'
-                        }}
-                        onInput={(e) => {
-                            // Auto-resize textarea to fit content
-                            const target = e.target as HTMLTextAreaElement
-                            handleTextareaResize(target)
-                        }}
-                    />
-                ) : (
-                    <div
-                        onDoubleClick={handleDoubleClick}
-                        className="cursor-pointer whitespace-pre-wrap"
-                        style={{ lineHeight: '1.2em' }}
+        <div
+            onDoubleClick={requestEdit}
+            className={
+                'rounded-md border bg-white text-gray-900 px-3 py-2 shadow-sm min-w-32 ' +
+                (selected ? 'border-blue-400' : 'border-gray-300')
+            }
+        >
+            <Handle type="target" position={Position.Left} className="!w-2 !h-2 !bg-slate-400" />
+            {isEditing ? (
+                <textarea
+                    ref={taRef}
+                    className="text-sm bg-white text-gray-900 outline-none border border-gray-300 rounded px-1 py-1 resize-none"
+                    autoFocus
+                    rows={1}
+                    value={value}
+                    onChange={(e) => {
+                        setValue(e.target.value)
+                        const el = taRef.current
+                        if (el) {
+                            el.style.height = 'auto'
+                            el.style.height = `${el.scrollHeight}px`
+                        }
+                        setEditWidth(measureTextWidth(e.target.value))
+                    }}
+                    onFocus={() => {
+                        const el = taRef.current
+                        if (el) {
+                            el.style.height = 'auto'
+                            el.style.height = `${el.scrollHeight}px`
+                        }
+                        setEditWidth(measureTextWidth(value))
+                    }}
+                    onBlur={() => commit(value)}
+                    onKeyDown={(e) => {
+                        // Enter inserts newline by default; Ctrl/Cmd+Enter commits
+                        if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+                            e.preventDefault()
+                            commit(value)
+                        }
+                        if (e.key === 'Escape') {
+                            e.preventDefault()
+                            cancel()
+                        }
+                    }}
+                    style={{ width: `${editWidth}px` }}
+                />
+            ) : (
+                <div
+                    className="text-sm whitespace-pre-wrap leading-snug cursor-pointer"
+                    onDoubleClick={requestEdit}
+                >
+                    {data?.label ?? 'Step'}
+                </div>
+            )}
+            <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-sky-400" />
+        </div>
+    )
+}
+
+// Register node types as a static object to avoid hook usage in conditional render paths
+const nodeTypes = { side: SideNode }
+const edgeTypes = { editableLabel: EditableLabelEdge }
+
+function computeLevels(nodes: Node[], edges: Edge[]) {
+    // Nodes with no incoming edges are sources; assign level 0, then BFS forward
+    const incomingCount = new Map<string, number>()
+    nodes.forEach((n) => incomingCount.set(n.id, 0))
+    edges.forEach((e) => incomingCount.set(e.target, (incomingCount.get(e.target) || 0) + 1))
+    const queue: string[] = []
+    const level: Record<string, number> = {}
+    nodes.forEach((n) => {
+        if ((incomingCount.get(n.id) || 0) === 0) {
+            level[n.id] = 0
+            queue.push(n.id)
+        }
+    })
+    if (queue.length === 0 && nodes.length) {
+        // fallback for cycles
+        level[nodes[0].id] = 0
+        queue.push(nodes[0].id)
+    }
+    while (queue.length) {
+        const u = queue.shift()!
+        const next = (level[u] || 0) + 1
+        edges
+            .filter((e) => e.source === u)
+            .forEach((e) => {
+                if (!(e.target in level)) {
+                    level[e.target] = next
+                    queue.push(e.target)
+                }
+            })
+    }
+    return level
+}
+
+function orderWithinLevels(levels: Record<string, number>, nodes: Node[], edges: Edge[]) {
+    // Build children map by following edges that increase level by 1
+    const childrenMap = new Map<string, string[]>()
+    nodes.forEach((n) => childrenMap.set(n.id, []))
+    edges.forEach((e) => {
+        if ((levels[e.source] ?? 0) + 1 === (levels[e.target] ?? 0)) {
+            childrenMap.get(e.source)!.push(e.target)
+        }
+    })
+
+    // Roots = min level nodes
+    const minLevel = Math.min(...Object.values(levels))
+    const roots = nodes.filter((n) => (levels[n.id] ?? 0) === minLevel).map((n) => n.id)
+    const visited = new Set<string>()
+    const build = (id: string): D3Node => {
+        if (visited.has(id)) return { id, children: [] }
+        visited.add(id)
+        const children = (childrenMap.get(id) || []).map(build)
+        return { id, children }
+    }
+    const forest: D3Node[] = roots.map(build)
+    const superRoot: D3Node = { id: '__root__', children: forest }
+    const root = hierarchy<D3Node>(superRoot, (d) => d.children || [])
+    const layoutTree = tree<D3Node>().separation((a, b) => (a.parent === b.parent ? 1 : 2))
+    const laid = layoutTree(root)
+    const xById = new Map<string, number>()
+    laid
+        .descendants()
+        .forEach((d) => {
+            const nid = d.data.id
+            if (nid && nid !== '__root__') xById.set(nid, d.x || 0)
+        })
+
+    // Group by level and sort by x
+    const nodesByLevel = new Map<number, Node[]>()
+    nodes.forEach((n) => {
+        const L = levels[n.id] || 0
+        if (!nodesByLevel.has(L)) nodesByLevel.set(L, [])
+        nodesByLevel.get(L)!.push(n)
+    })
+    nodesByLevel.forEach((arr) => arr.sort((a, b) => (xById.get(a.id) ?? 0) - (xById.get(b.id) ?? 0)))
+    return nodesByLevel
+}
+
+// Estimate node width if measured width isn't available yet
+function estimateNodeWidth(n: Node) {
+    const measured = (n as any).width as number | undefined
+    if (measured && measured > 0) return measured
+    const label = ((n.data as any)?.label as string) ?? ''
+    const longestLine = label.split('\n').reduce((m, s) => Math.max(m, s.length), 0)
+    const charW = 7.5 // approx for text-sm
+    const padding = 24 // px-3 on both sides ~ 12*2
+    const minW = 128 // Tailwind min-w-32
+    return Math.max(minW, Math.ceil(longestLine * charW + padding))
+}
+
+function estimateNodeHeight(n: Node) {
+    const measured = (n as any).height as number | undefined
+    if (measured && measured > 0) return measured
+    const label = ((n.data as any)?.label as string) ?? ''
+    const lines = Math.max(1, label.split('\n').length)
+    const lineH = 18 // ~1.125rem line-height for text-sm
+    const paddingY = 16 // py-2 container + textarea differences
+    const minH = 40
+    return Math.max(minH, lines * lineH + paddingY)
+}
+
+function layout(nodesIn: Node[], edges: Edge[], cfg: LayoutCfg = { baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 }) {
+    const levels = computeLevels(nodesIn, edges)
+    const byLevel = orderWithinLevels(levels, nodesIn, edges)
+    const sortedLevels = Array.from(byLevel.keys()).sort((a, b) => a - b)
+
+    // Determine max width per column
+    const colMaxWidth: Record<number, number> = {}
+    sortedLevels.forEach((L) => {
+        const arr = byLevel.get(L) || []
+        colMaxWidth[L] = Math.max(1, ...arr.map((n) => estimateNodeWidth(n)))
+    })
+
+    // Compute x positions cumulatively using each column's max width
+    const colX: Record<number, number> = {}
+    let runningX = cfg.baseX
+    sortedLevels.forEach((L, idx) => {
+        if (idx === 0) {
+            colX[L] = runningX
+        } else {
+            const prevL = sortedLevels[idx - 1]
+            runningX = (colX[prevL] || cfg.baseX) + (colMaxWidth[prevL] || 0) + cfg.colGap
+            colX[L] = runningX
+        }
+    })
+
+    // For each column, stack nodes centered vertically using measured heights; center nodes within column width
+    const positioned = nodesIn.map((n) => ({ ...n }))
+    const nodeIndex = new Map<string, number>()
+    sortedLevels.forEach((L) => {
+        const arr = byLevel.get(L) || []
+        const heights = arr.map((n) => estimateNodeHeight(n))
+        const totalHeight = heights.reduce((a, b) => a + b, 0) + Math.max(0, arr.length - 1) * cfg.rowPadding
+        let cursorY = cfg.baseY - totalHeight / 2
+        const colW = colMaxWidth[L] || 0
+        arr.forEach((n, i) => {
+            nodeIndex.set(n.id, i)
+            const estimatedW = estimateNodeWidth(n)
+            const left = (colX[L] || cfg.baseX) + Math.max(0, (colW - estimatedW) / 2)
+            const y = cursorY
+            cursorY += heights[i] + cfg.rowPadding
+            const idx = positioned.findIndex((p) => p.id === n.id)
+            if (idx >= 0) positioned[idx] = { ...positioned[idx], position: { x: left, y } }
+        })
+    })
+    return { nodes: positioned, levels, nodeIndex }
+}
+
+function WorkflowInner() {
+    const { selectedOrgId } = useOrg()
+    const [nodes, setNodes, onNodesChange] = useNodesState([])
+    const [edges, setEdges, onEdgesChange] = useEdgesState([])
+    const [loading, setLoading] = useState(false)
+    const [error, setError] = useState<string | null>(null)
+    const rf = useReactFlow()
+
+    // Track connection state to decide whether to create a new node on free drop
+    const [connectingFromId, setConnectingFromId] = useState<string | null>(null)
+    const [didConnect, setDidConnect] = useState(false)
+    const [saving, setSaving] = useState(false)
+    const [saveMsg, setSaveMsg] = useState<string | null>(null)
+    const [isEditingEdge, setIsEditingEdge] = useState<boolean>(false)
+    const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
+    const [layoutConfig, setLayoutConfig] = useState<LayoutCfg>({ baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 })
+    const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+    const [menuTarget, setMenuTarget] = useState<{ kind: 'node' | 'edge'; id: string } | null>(null)
+    // Re-enable auto-layout; it will pause while editing
+    const AUTO_LAYOUT = true
+
+    // ID helpers (UUID v4)
+    const generateUuid = () =>
+        (globalThis as any).crypto?.randomUUID?.() ||
+        'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = (Math.random() * 16) | 0
+            const v = c === 'x' ? r : (r & 0x3) | 0x8
+            return v.toString(16)
+        })
+    const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s)
+
+    // Snapshot of last loaded/saved state to compute diffs
+    const snapshotRef = useRef<{ nodeName: Record<string, string>; edgeLabel: Record<string, string> }>(
+        { nodeName: {}, edgeLabel: {} }
+    )
+    // Track deletions to persist
+    const deletedNodeIdsRef = useRef<Set<string>>(new Set())
+    const deletedEdgeIdsRef = useRef<Set<string>>(new Set())
+
+    const load = useCallback(async () => {
+        if (!selectedOrgId) return
+        setLoading(true)
+        setError(null)
+        try {
+            const { data: steps, error: sErr } = await supabase
+                .from('process_step')
+                .select('id, name, description, metadata, parent_step_id')
+                .eq('organisation_id', selectedOrgId)
+            if (sErr) throw sErr
+            const { data: flows, error: fErr } = await supabase
+                .from('process_flow_edge')
+                .select('id, from_step_id, to_step_id, label, metadata')
+                .eq('organisation_id', selectedOrgId)
+            if (fErr) throw fErr
+
+            const rfNodes: Node[] = (steps || []).map((s: any) => ({
+                id: String(s.id),
+                data: { label: s.name || 'Step' },
+                position: { x: 0, y: 0 },
+                type: 'side',
+            }))
+            const rfEdges: Edge[] = (flows || []).map((e: any) => ({
+                id: String(e.id),
+                source: String(e.from_step_id),
+                target: String(e.to_step_id),
+                type: 'editableLabel',
+                data: { label: e.label || '' },
+            }))
+
+            const { nodes: laid } = layout(rfNodes, rfEdges, layoutConfig)
+            setNodes(laid)
+            setEdges(rfEdges)
+            // refresh snapshot
+            const nodeName: Record<string, string> = {}
+            laid.forEach((n) => (nodeName[n.id] = (n.data as any)?.label ?? ''))
+            const edgeLabel: Record<string, string> = {}
+            rfEdges.forEach((e) => (edgeLabel[e.id] = ((e as any).data?.label as string) ?? ''))
+            snapshotRef.current = { nodeName, edgeLabel }
+        } catch (err: any) {
+            setError(err?.message || 'Failed to load processes')
+            setNodes([])
+            setEdges([])
+        } finally {
+            setLoading(false)
+        }
+    }, [selectedOrgId, setNodes, setEdges])
+
+    useEffect(() => {
+        void load()
+    }, [load])
+
+    // Auto-layout: whenever the graph structure (node ids or edge pairs) changes
+    const structureKey = useMemo(() => {
+        const n = [...nodes.map((x) => x.id)].sort()
+        const e = [...edges.map((x) => `${x.source}->${x.target}`)].sort()
+        return JSON.stringify({ n, e })
+    }, [nodes, edges])
+
+    // When nodes get measured widths after first render, recompute layout to use true widths
+    const widthKey = useMemo(() => nodes.map((n) => (n as any).width || 0).join(','), [nodes])
+    const heightKey = useMemo(() => nodes.map((n) => (n as any).height || 0).join(','), [nodes])
+
+    useEffect(() => {
+        // compute layout only when structure changes AND nothing is being edited
+        if (!AUTO_LAYOUT) return
+        if (editingNodeId || isEditingEdge) return // skip layout while editing
+        const { nodes: laid } = layout(nodes, edges, layoutConfig)
+        setNodes(laid)
+        // do not setEdges here to avoid changing edge objects needlessly
+    }, [structureKey, editingNodeId, isEditingEdge, layoutConfig])
+
+    useEffect(() => {
+        // Re-run layout once widths are known
+        if (!AUTO_LAYOUT) return
+        if (editingNodeId || isEditingEdge) return
+        const { nodes: laid } = layout(nodes, edges, layoutConfig)
+        setNodes(laid)
+    }, [widthKey, editingNodeId, isEditingEdge, layoutConfig])
+
+    useEffect(() => {
+        if (!AUTO_LAYOUT) return
+        if (editingNodeId || isEditingEdge) return
+        const { nodes: laid } = layout(nodes, edges, layoutConfig)
+        setNodes(laid)
+    }, [heightKey, editingNodeId, isEditingEdge, layoutConfig])
+
+    // Listen for inline node label update events from custom nodes
+    useEffect(() => {
+        const handleUpdate = (e: Event) => {
+            const detail = (e as CustomEvent).detail as { nodeId: string; newLabel: string }
+            if (!detail?.nodeId) return
+            setNodes((nds) => nds.map((n) => (n.id === detail.nodeId ? { ...n, data: { ...(n.data as any), label: detail.newLabel } } : n)))
+            setEditingNodeId(null) // clear editing state when update completes
+        }
+        
+        const handleStartEdit = (e: Event) => {
+            const detail = (e as CustomEvent).detail as { nodeId: string }
+            if (!detail?.nodeId) return
+            setEditingNodeId(detail.nodeId) // track which node is being edited
+        }
+        
+        window.addEventListener('updateNodeLabel', handleUpdate as any)
+        window.addEventListener('startNodeEdit', handleStartEdit as any)
+        return () => {
+            window.removeEventListener('updateNodeLabel', handleUpdate as any)
+            window.removeEventListener('startNodeEdit', handleStartEdit as any)
+        }
+    }, [setNodes])
+
+    // Double click node to trigger inline editing
+    const onNodeDoubleClick = useCallback((_: any, node: Node) => {
+        console.log('Node double clicked:', node.id)
+        // Dispatch event to trigger editing mode in the node
+        const event = new CustomEvent('startNodeEdit', { detail: { nodeId: node.id } })
+        window.dispatchEvent(event)
+    }, [])
+
+    // Provide commit + editing callbacks to edge data at render time
+    const onEdgeLabelCommit = useCallback((edgeId: string, value: string) => {
+        setEdges((eds) => eds.map((e) => (e.id === edgeId ? { ...e, data: { ...(e.data as any), label: value } } : e)))
+    }, [setEdges])
+
+    const onEdgeEditingChange = useCallback((_edgeId: string, editing: boolean) => {
+        setIsEditingEdge(editing)
+    }, [])
+
+    const onOpenEdgeMenu = useCallback((edgeId: string, x: number, y: number) => {
+        setMenuTarget({ kind: 'edge', id: edgeId })
+        setMenuPos({ x, y })
+    }, [])
+
+    const viewEdges = useMemo(() => {
+        return edges.map((e) => ({
+            ...e,
+            type: 'editableLabel',
+        data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu },
+        })) as Edge[]
+    }, [edges, onEdgeLabelCommit, onEdgeEditingChange, onOpenEdgeMenu])
+
+        // Handle delete key for selected nodes/edges
+        useEffect(() => {
+            const onKey = (e: KeyboardEvent) => {
+                if (e.key !== 'Delete' && e.key !== 'Backspace') return
+                const toDeleteNodes = nodes.filter((n) => n.selected).map((n) => n.id)
+                const toDeleteEdges = edges.filter((ed) => ed.selected).map((ed) => ed.id)
+                if (toDeleteNodes.length === 0 && toDeleteEdges.length === 0) return
+                // Remove selected edges first
+                if (toDeleteEdges.length) {
+                    setEdges((eds) => eds.filter((e) => !toDeleteEdges.includes(e.id)))
+                    toDeleteEdges.forEach((id) => deletedEdgeIdsRef.current.add(id))
+                }
+                // Remove selected nodes and any incident edges
+                if (toDeleteNodes.length) {
+                    // mark incident edges for deletion
+                    const incidentEdgeIds = edges.filter((e) => toDeleteNodes.includes(e.source) || toDeleteNodes.includes(e.target)).map((e) => e.id)
+                    incidentEdgeIds.forEach((id) => deletedEdgeIdsRef.current.add(id))
+                    setNodes((nds) => nds.filter((n) => !toDeleteNodes.includes(n.id)))
+                    setEdges((eds) => eds.filter((e) => !toDeleteNodes.includes(e.source) && !toDeleteNodes.includes(e.target)))
+                    toDeleteNodes.forEach((id) => deletedNodeIdsRef.current.add(id))
+                }
+            }
+            window.addEventListener('keydown', onKey)
+            return () => window.removeEventListener('keydown', onKey)
+        }, [nodes, edges, setNodes, setEdges])
+
+    // Start connecting from a source handle (right handle)
+    const onConnectStart = useCallback<OnConnectStart>((event, params) => {
+        if (params?.handleType === 'source' && params.nodeId) {
+            setConnectingFromId(params.nodeId)
+            setDidConnect(false)
+        }
+    }, [])
+
+    // If a valid connection was made, add it and mark didConnect
+    const onConnect = useCallback<OnConnect>(
+        (connection) => {
+            setEdges((eds) => {
+                const edgeId = generateUuid()
+                return addEdge({ id: edgeId, ...connection, type: 'editableLabel', data: { label: '' } } as any, eds)
+            })
+            setDidConnect(true)
+        },
+        [setEdges]
+    )
+
+    // If connection ended on empty pane, create a new node and connect to it
+    const onConnectEnd = useCallback<OnConnectEnd>(
+        (event) => {
+            if (!connectingFromId) return
+            // If we already connected to a node/handle, skip creating a new node
+            if (didConnect) {
+                setConnectingFromId(null)
+                setDidConnect(false)
+                return
+            }
+            const target = event.target as HTMLElement | null
+            const isPane = !!target && target.classList.contains('react-flow__pane')
+            if (!isPane) return
+            // support mouse and touch
+            const isTouch = 'changedTouches' in (event as any) && (event as any).changedTouches?.length > 0
+            const clientX = isTouch ? (event as any).changedTouches[0].clientX : (event as any).clientX
+            const clientY = isTouch ? (event as any).changedTouches[0].clientY : (event as any).clientY
+            const pos = rf.screenToFlowPosition({ x: clientX, y: clientY })
+            const newId = generateUuid()
+            const newNode: Node = {
+                id: newId,
+                type: 'side',
+                data: { label: 'New Step' },
+                position: pos,
+            }
+            const newEdge: Edge = { id: generateUuid(), source: connectingFromId, target: newId, type: 'editableLabel', data: { label: '' } } as any
+            setNodes((nds) => nds.concat(newNode))
+            setEdges((eds) => eds.concat(newEdge))
+            setConnectingFromId(null)
+            setDidConnect(false)
+        },
+        [connectingFromId, didConnect, rf, setNodes, setEdges]
+    )
+
+    // Node context menu handler
+    const onNodeContextMenu = useCallback((event: any, node: Node) => {
+        event?.preventDefault?.()
+        setMenuTarget({ kind: 'node', id: node.id })
+        const x = (event?.clientX as number) ?? 0
+        const y = (event?.clientY as number) ?? 0
+        setMenuPos({ x, y })
+    }, [])
+
+    // Close menu on click elsewhere
+    useEffect(() => {
+        const close = () => setMenuPos(null)
+        window.addEventListener('click', close)
+        return () => {
+            window.removeEventListener('click', close)
+        }
+    }, [])
+
+    const deleteMenuTarget = useCallback(() => {
+        if (!menuTarget) return
+        if (menuTarget.kind === 'node') {
+            const id = menuTarget.id
+            setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
+        // mark incident edges for deletion and remove
+        const incidentEdgeIds = edges.filter((e) => e.source === id || e.target === id).map((e) => e.id)
+        incidentEdgeIds.forEach((eid) => deletedEdgeIdsRef.current.add(eid))
+        setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
+            deletedNodeIdsRef.current.add(id)
+            setNodes((nds) => nds.filter((n) => n.id !== id))
+        } else {
+            const id = menuTarget.id
+            setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === id })))
+            setEdges((eds) => eds.filter((e) => e.id !== id))
+            deletedEdgeIdsRef.current.add(id)
+        }
+        setMenuPos(null)
+    }, [menuTarget, setNodes, setEdges, edges])
+
+    // Normalize any temporary IDs to UUIDs (for prior sessions) and update state
+    const normalizeIdsIfNeeded = useCallback(() => {
+        const idMap: Record<string, string> = {}
+        let changed = false
+        const fixedNodes = nodes.map((n) => {
+            if (!isUuid(n.id)) {
+                const newId = generateUuid()
+                idMap[n.id] = newId
+                changed = true
+                return { ...n, id: newId }
+            }
+            return n
+        })
+        const fixedEdges = edges.map((e) => {
+            let id = e.id
+            if (!isUuid(id)) {
+                id = generateUuid()
+                changed = true
+            }
+            const source = idMap[e.source] || e.source
+            const target = idMap[e.target] || e.target
+            if (id !== e.id || source !== e.source || target !== e.target) {
+                changed = true
+                return { ...e, id, source, target }
+            }
+            return e
+        })
+        if (changed) {
+            setNodes(fixedNodes)
+            setEdges(fixedEdges)
+        }
+        return { changed, idMap }
+    }, [nodes, edges, setNodes, setEdges])
+
+    const saveChanges = useCallback(async () => {
+        if (!selectedOrgId) return
+        setSaving(true)
+        setSaveMsg(null)
+        try {
+            // Ensure ids are UUIDs
+            const { changed } = normalizeIdsIfNeeded()
+            // If we changed IDs, wait a tick so state updates before diffing
+            if (changed) await new Promise((r) => setTimeout(r, 0))
+
+            const snap = snapshotRef.current
+            // Persist deletions first, edges then nodes to satisfy FKs
+            if (deletedEdgeIdsRef.current.size || deletedNodeIdsRef.current.size) {
+                // Delete edges explicitly selected
+                if (deletedEdgeIdsRef.current.size) {
+                    const ids = Array.from(deletedEdgeIdsRef.current)
+                    const { error: delE } = await supabase.from('process_flow_edge').delete().in('id', ids)
+                    if (delE) throw delE
+                    // Remove from snapshot so upsert doesn't resurrect
+                    ids.forEach((id) => delete snap.edgeLabel[id])
+                    deletedEdgeIdsRef.current.clear()
+                }
+                // Also delete edges incident to nodes queued for deletion (safety against FK violations)
+                if (deletedNodeIdsRef.current.size) {
+                    const nodeIds = Array.from(deletedNodeIdsRef.current)
+                    // delete edges where from_step_id IN nodeIds OR to_step_id IN nodeIds
+                    // Supabase JS: use .or with comma-separated filters
+                    const orFilter = `from_step_id.in.(${nodeIds.join(',')}),to_step_id.in.(${nodeIds.join(',')})`
+                    const { error: delE2 } = await supabase.from('process_flow_edge').delete().or(orFilter)
+                    if (delE2) throw delE2
+                }
+                // Now delete nodes
+                if (deletedNodeIdsRef.current.size) {
+                    const ids = Array.from(deletedNodeIdsRef.current)
+                    const { error: delN } = await supabase.from('process_step').delete().in('id', ids)
+                    if (delN) throw delN
+                    ids.forEach((id) => delete snap.nodeName[id])
+                    deletedNodeIdsRef.current.clear()
+                }
+            }
+
+                        // New/updated nodes
+            const nodeRows: { id: string; organisation_id: string; name: string }[] = nodes.map((n: any) => ({
+                id: n.id,
+                organisation_id: selectedOrgId,
+                name: (n.data?.label as string) ?? '',
+            }))
+            const newNodes = nodeRows.filter((r) => snap.nodeName[r.id] === undefined)
+            const changedNodes = nodeRows.filter((r) => snap.nodeName[r.id] !== undefined && snap.nodeName[r.id] !== r.name)
+
+            if (newNodes.length || changedNodes.length) {
+                const upsertNodes = [...newNodes, ...changedNodes]
+                const { error: nErr } = await supabase.from('process_step').upsert(upsertNodes, { onConflict: 'id' })
+                if (nErr) throw nErr
+            }
+
+            // New/updated edges
+        const edgeRows: { id: string; organisation_id: string; from_step_id: string; to_step_id: string; label: string }[] = edges.map(
+                (e: any) => ({
+                    id: e.id,
+                    organisation_id: selectedOrgId,
+                    from_step_id: e.source,
+                    to_step_id: e.target,
+            label: (e.data?.label as string) ?? (e.label as string) ?? '',
+                })
+            )
+            const newEdges = edgeRows.filter((r) => snap.edgeLabel[r.id] === undefined)
+            const changedEdges = edgeRows.filter((r) => snap.edgeLabel[r.id] !== undefined && snap.edgeLabel[r.id] !== r.label)
+
+            if (newEdges.length || changedEdges.length) {
+                const upsertEdges = [...newEdges, ...changedEdges]
+                const { error: eErr } = await supabase.from('process_flow_edge').upsert(upsertEdges, { onConflict: 'id' })
+                if (eErr) throw eErr
+            }
+
+            // Update snapshot to current state
+            const nodeName: Record<string, string> = {}
+            nodes.forEach((n: any) => (nodeName[n.id] = (n.data?.label as string) ?? ''))
+            const edgeLabel: Record<string, string> = {}
+            edges.forEach((e: any) => (edgeLabel[e.id] = (e.data?.label as string) ?? (e.label as string) ?? ''))
+            snapshotRef.current = { nodeName, edgeLabel }
+
+            setSaveMsg('Saved')
+        } catch (err: any) {
+            setSaveMsg(err?.message || 'Save failed')
+        } finally {
+            setSaving(false)
+            setTimeout(() => setSaveMsg(null), 2500)
+        }
+    }, [edges, nodes, normalizeIdsIfNeeded, selectedOrgId])
+
+    return (
+        <div className="h-screen w-screen bg-gray-950">
+            <div className="absolute inset-x-0 top-0 z-10 h-12 border-b border-gray-800 bg-gray-900/80 backdrop-blur flex items-center justify-between px-4">
+                <div className="text-yellow-400 font-medium">Workflow Designer</div>
+                <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 mr-2 text-xs text-gray-300">
+                        <label className="flex items-center gap-1">Col gap
+                            <input type="number" className="w-16 bg-gray-800 border border-gray-700 rounded px-1 py-0.5"
+                                value={layoutConfig.colGap}
+                                onChange={(e) => setLayoutConfig((c) => ({ ...c, colGap: Number(e.target.value) }))} />
+                        </label>
+                        <label className="flex items-center gap-1">Row pad
+                            <input type="number" className="w-16 bg-gray-800 border border-gray-700 rounded px-1 py-0.5"
+                                value={layoutConfig.rowPadding}
+                                onChange={(e) => setLayoutConfig((c) => ({ ...c, rowPadding: Number(e.target.value) }))} />
+                        </label>
+                    </div>
+                    <button onClick={load} className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded">
+                        Reload
+                    </button>
+                    <button
+                        onClick={saveChanges}
+                        disabled={!selectedOrgId || saving}
+                        className="px-3 py-1.5 text-sm rounded text-white disabled:opacity-60 disabled:cursor-not-allowed bg-emerald-600 hover:bg-emerald-500"
                     >
-                        {data.label}
+                        {saving ? 'Saving…' : 'Save'}
+                    </button>
+                </div>
+            </div>
+            <div className="pt-12 h-full">
+                {error ? (
+                    <div className="text-red-400 p-3">{error}</div>
+                ) : loading ? (
+                    <div className="text-gray-400 p-3">Loading…</div>
+        ) : (
+            <>
+                    <ReactFlow
+                        nodes={nodes}
+                        edges={viewEdges}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
+                        onNodeDoubleClick={onNodeDoubleClick}
+                        onNodeContextMenu={onNodeContextMenu}
+                        onConnectStart={onConnectStart}
+                        onConnectEnd={onConnectEnd}
+                        onConnect={onConnect}
+                        nodeTypes={nodeTypes}
+                        edgeTypes={edgeTypes}
+                                     nodesDraggable
+                                     elementsSelectable
+                                     selectionOnDrag
+                        panOnDrag={false}
+                        selectionMode={SelectionMode.Partial}
+                        multiSelectionKeyCode="Shift"
+                        fitView
+                    >
+                        <Background />
+                        <Controls />
+                    </ReactFlow>
+                    {menuPos && menuTarget && (
+                        <div
+                className="fixed z-50 bg-gray-800 text-gray-100 border border-gray-700 rounded shadow-md"
+                            style={{ left: menuPos.x, top: menuPos.y }}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <button
+                                className="px-3 py-1.5 text-sm w-full text-left hover:bg-gray-700"
+                                onClick={deleteMenuTarget}
+                            >
+                                Delete {menuTarget.kind === 'node' ? 'node' : 'edge'}
+                            </button>
+                        </div>
+                    )}
+            </>
+                )}
+                {saveMsg && (
+                    <div className="absolute top-14 right-4 text-xs px-2 py-1 rounded bg-gray-800 text-gray-100 border border-gray-700">
+                        {saveMsg}
                     </div>
                 )}
             </div>
-            <Handle
-                type="source"
-                position={Position.Right}
-                style={{ background: '#555' }}
-                isConnectable={isConnectable}
-            />
         </div>
     )
 }
 
-const nodeTypes = {
-    custom: CustomNode,
-    input: CustomNode,
-    output: CustomNode,
-}
-
-const initialNodes: Node[] = [
-    {
-        id: '1',
-        type: 'custom',
-        data: { label: 'Start' },
-        position: { x: 50, y: 100 },
-    },
-    {
-        id: '2',
-        type: 'custom',
-        data: { label: 'Process Step' },
-        position: { x: 250, y: 100 },
-    },
-    {
-        id: '3',
-        type: 'custom',
-        data: { label: 'Decision Point' },
-        position: { x: 450, y: 100 },
-    },
-    {
-        id: '4',
-        type: 'custom',
-        data: { label: 'End' },
-        position: { x: 650, y: 100 },
-    },
-]
-
-const initialEdges: Edge[] = [
-    { id: 'e1-2', source: '1', target: '2', type: 'pulseBezier' as any },
-    { id: 'e2-3', source: '2', target: '3', type: 'pulseBezier' as any },
-    { id: 'e3-4', source: '3', target: '4', type: 'pulseBezier' as any },
-]
-
-// Legacy orthogonal edge removed. We now exclusively use Bezier edges.
-
-// Smooth bezier edge with fiber-optic animation, using only endpoints; no wiring channels
-function PulseBezierEdge({ id, sourceX, sourceY, targetX, targetY, style = {}, markerEnd, data }: any) {
-    const isBackwards: boolean = !!data?.isBackwards
-    const isForwardOverrun: boolean = !!data?.isForwardOverrun
-    const arcY: number | undefined = data?.arcY
-    const arcXMid: number | undefined = data?.arcXMid
-
-    // Compute cubic bezier control points based on horizontal distance
-    const dx = targetX - sourceX
-    const dy = targetY - sourceY
-    const absDx = Math.abs(dx)
-    const base = Math.max(40, absDx * 0.25)
-    let path: string
-    if (arcY != null && arcXMid != null && dx >= 0) {
-        // Two-segment cubic with an explicit apex above skipped columns
-        const c1x = sourceX + base
-        const c1y = arcY
-        const c2x = arcXMid - base
-        const c2y = arcY
-        const c3x = arcXMid + base
-        const c3y = arcY
-        const c4x = targetX - base
-        const c4y = arcY
-        path = `M ${sourceX} ${sourceY} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${arcXMid} ${arcY}` +
-            ` C ${c3x} ${c3y}, ${c4x} ${arcY}, ${targetX} ${targetY}`
-    } else {
-        // Single cubic default
-        const c1x = sourceX + (dx >= 0 ? base : -base)
-        const c1y = arcY != null ? arcY : sourceY
-        const c2x = targetX - (dx >= 0 ? base : -base)
-        const c2y = arcY != null ? arcY : targetY
-        path = `M ${sourceX} ${sourceY} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${targetX} ${targetY}`
-    }
-
-    return (
-        <g id={id}>
-            <path
-                className="react-flow__edge-path edge-fiber"
-                d={path}
-                markerEnd={markerEnd}
-                fill="none"
-                style={style}
-            />
-            <path
-                className={`react-flow__edge-path edge-pulse${isForwardOverrun ? ' edge-pulse--overrun' : ''}${isBackwards ? ' edge-pulse-backward' : ''}`}
-                d={path}
-                markerEnd={markerEnd}
-                fill="none"
-                style={style}
-            />
-        </g>
-    )
-}
-
-const edgeTypes = {
-    pulseBezier: PulseBezierEdge,
-}
-
-// Main workflow component that needs React Flow context
-function WorkflowContent() {
-    const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes)
-    const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges)
-    const [showConfig, setShowConfig] = useState(false)
-    const [nodePadding, setNodePadding] = useState(50)
-    // Relative spacing: spacing to next column = nextColumnNetHeight * spacingFactor
-    const [spacingFactor, setSpacingFactor] = useState(0.3)
-    const [columnPadding, setColumnPadding] = useState(40)
-    const [lockNodes, setLockNodes] = useState(true)
-    // Connector padding removed entirely (no target-side fan-out)
-    const autoLayoutRef = useRef<(() => void) | null>(null)
-    const connectingNodeIdRef = useRef<string | null>(null)
-    const connectionMadeRef = useRef<boolean>(false)
-    // Persisted levels so nodes never move to an earlier column (non-decreasing levels)
-    const stableLevelsRef = useRef<Record<string, number>>({})
-
-    // Get React Flow instance for viewport access and node measurements
-    const { getViewport, getNode, screenToFlowPosition } = useReactFlow()
-
-    // Handle node label updates
-    useEffect(() => {
-        const handleUpdateNodeLabel = (event: any) => {
-            const { nodeId, newLabel } = event.detail
-            setNodes((nds) =>
-                nds.map((node) =>
-                    node.id === nodeId
-                        ? { ...node, data: { ...node.data, label: newLabel } }
-                        : node
-                )
-            )
-            // self-organize after label size change
-            setTimeout(() => autoLayoutRef.current?.(), 0)
-        }
-
-        window.addEventListener('updateNodeLabel', handleUpdateNodeLabel)
-        return () => window.removeEventListener('updateNodeLabel', handleUpdateNodeLabel)
-    }, [setNodes])
-
-    // Helper function to calculate node width consistently
-    const calculateNodeWidth = useCallback((nodeText: string) => {
-        let nodeWidth = 120 // min-w-[120px] from CSS
-        if (typeof nodeText === 'string') {
-            const lines = nodeText.split('\n')
-            const longestLine = lines.reduce((longest, line) =>
-                line.length > longest.length ? line : longest, '')
-            // More accurate calculation: text-sm (14px) * 0.6 char width + px-4 padding (32px total)
-            const estimatedTextWidth = longestLine.length * 8.4 // Slightly more accurate than 8px
-            const totalWidth = estimatedTextWidth + 32 // Add px-4 padding (16px left + 16px right)
-            nodeWidth = Math.max(120, totalWidth) // Respect min-w-[120px]
-        }
-        return nodeWidth
-    }, [])
-
-    // Helper function to get node width for any node - used by getLayoutData
-    const getNodeWidthFromNode = useCallback((node: Node) => {
-        const label = node.data?.label || 'Node'
-        return calculateNodeWidth(typeof label === 'string' ? label : 'Node')
-    }, [calculateNodeWidth])
-
-    // Fallback height estimator based on text
-    const estimateNodeHeight = useCallback((nodeText: string) => {
-        const lineCount = typeof nodeText === 'string' ? nodeText.split('\n').length : 1
-        return Math.max(40, lineCount * 20 + 20)
-    }, [])
-
-    // Get measured node size from React Flow if available; otherwise fall back to estimates
-    const getNodeSize = useCallback((n: Node) => {
-        const rfNode: any = getNode?.(n.id)
-        const label = n.data?.label ?? 'Node'
-        const width = rfNode?.measured?.width ?? rfNode?.width ?? (n as any)?.width ?? getNodeWidthFromNode(n)
-        const height = rfNode?.measured?.height ?? rfNode?.height ?? (n as any)?.height ?? estimateNodeHeight(label as string)
-        return { width, height }
-    }, [getNode, getNodeWidthFromNode, estimateNodeHeight])
-
-    // Ensure unique edges helper
-    const dedupeEdges = useCallback((eds: Edge[]) => {
-        const seen = new Set<string>()
-        const result: Edge[] = []
-        for (const e of eds) {
-            const key = `${e.source}->${e.target}`
-            if (!seen.has(key)) {
-                seen.add(key)
-                // force bezier type
-                result.push({ ...e, type: 'pulseBezier' as any })
-            }
-        }
-        return result
-    }, [])
-
-    const onConnect = useCallback(
-        (params: Connection) => {
-            // Mark that a valid connection was completed during this drag
-            connectionMadeRef.current = true
-            // Block backward connections (target column earlier than source)
-            const levels = (() => {
-                // minimal BFS levels based on current nodes/edges
-                let sourceNodeIds = nodes
-                    .filter(node => !edges.some(edge => edge.target === node.id))
-                    .map(node => node.id)
-                if (sourceNodeIds.length === 0 && nodes.length > 0) {
-                    sourceNodeIds = [nodes[0].id]
-                }
-                const lv: Record<string, number> = {}
-                const queue: { id: string; level: number }[] = []
-                sourceNodeIds.forEach(id => { lv[id] = 0; queue.push({ id, level: 0 }) })
-                while (queue.length > 0) {
-                    const { id, level } = queue.shift()!
-                    const outgoing = edges.filter(e => e.source === id)
-                    outgoing.forEach(e => {
-                        const proposed = level + 1
-                        if (!(e.target in lv)) { lv[e.target] = proposed; queue.push({ id: e.target, level: proposed }) }
-                    })
-                }
-                return lv
-            })()
-            const s = params.source
-            const t = params.target
-            if (s && t && (levels[t] ?? 0) < (levels[s] ?? 0)) {
-                // Disallow creating backward edge
-                return
-            }
-            setEdges((eds) => {
-                // prevent duplicates
-                if (eds.some(e => e.source === params.source && e.target === params.target)) return eds
-                const next = addEdge({ ...params, type: 'pulseBezier' as any }, eds)
-                return dedupeEdges(next)
-            })
-            // self-organize after new connection
-            setTimeout(() => autoLayoutRef.current?.(), 0)
-        },
-        [setEdges, dedupeEdges, nodes, edges],
-    )
-
-    // Start a connection from a node's source handle (right)
-    const onConnectStart = useCallback<OnConnectStart>((_, params) => {
-        // Reset connection state at the start of a drag
-        connectionMadeRef.current = false
-        if (params?.handleType === 'source' && params?.nodeId) {
-            connectingNodeIdRef.current = params.nodeId
-        } else {
-            connectingNodeIdRef.current = null
-        }
-    }, [])
-
-    // If dropped on empty pane, create a new node at drop position and connect
-    const onConnectEnd = useCallback((event: MouseEvent | TouchEvent) => {
-        const srcId = connectingNodeIdRef.current
-        // Reset immediately to avoid stale state
-        connectingNodeIdRef.current = null
-
-        const targetEl = event.target as Element | null
-        const droppedOnPane = !!(targetEl && (targetEl.classList?.contains('react-flow__pane') || targetEl.closest?.('.react-flow__pane')))
-        // If we successfully connected to another node, do not create a new node
-        if (connectionMadeRef.current) {
-            return
-        }
-        if (!droppedOnPane || !srcId) return
-
-        // Get cursor screen position
-        let clientX = 0, clientY = 0
-        if ('changedTouches' in event && event.changedTouches?.length) {
-            clientX = event.changedTouches[0].clientX
-            clientY = event.changedTouches[0].clientY
-        } else if ('clientX' in event) {
-            clientX = (event as MouseEvent).clientX
-            clientY = (event as MouseEvent).clientY
-        }
-
-        const position = screenToFlowPosition({ x: clientX, y: clientY })
-        const newId = `node-${Date.now()}`
-        const newNode: Node = { id: newId, type: 'custom', position, data: { label: 'New node' } }
-        // Seed the new node level to next column relative to the source to avoid same/previous level placement
-        const currentLevels = (() => {
-            let sourceNodeIds = nodes
-                .filter(node => !edges.some(edge => edge.target === node.id))
-                .map(node => node.id)
-            if (sourceNodeIds.length === 0 && nodes.length > 0) {
-                sourceNodeIds = [nodes[0].id]
-            }
-            const lv: Record<string, number> = {}
-            const queue: { id: string; level: number }[] = []
-            sourceNodeIds.forEach(id => { lv[id] = 0; queue.push({ id, level: 0 }) })
-            while (queue.length > 0) {
-                const { id, level } = queue.shift()!
-                const outgoing = edges.filter(e => e.source === id)
-                outgoing.forEach(e => {
-                    const proposed = level + 1
-                    if (!(e.target in lv)) { lv[e.target] = proposed; queue.push({ id: e.target, level: proposed }) }
-                })
-            }
-            return lv
-        })()
-        const srcLevel = currentLevels[srcId] ?? 0
-        stableLevelsRef.current = { ...stableLevelsRef.current, [newId]: srcLevel + 1 }
-        setNodes((nds) => nds.concat(newNode))
-        setEdges((eds) => dedupeEdges(addEdge({ id: `e-${srcId}-${newId}-${Date.now()}` as any, source: srcId, target: newId, type: 'pulseBezier' as any } as any, eds)))
-
-        // Self-organize after creating new node and edge
-        setTimeout(() => autoLayoutRef.current?.(), 0)
-    }, [screenToFlowPosition, setNodes, setEdges, dedupeEdges])
-
-    // sanitize duplicates if any appear (e.g., after external changes) without causing loops
-    useEffect(() => {
-        setEdges((eds) => {
-            const seen = new Set<string>()
-            let changed = false
-            const result: Edge[] = []
-            for (const e of eds) {
-                const key = `${e.source}->${e.target}`
-                if (seen.has(key)) {
-                    changed = true
-                    continue
-                }
-                seen.add(key)
-                if (e.type !== ('bezier' as any)) {
-                    changed = true
-                    result.push({ ...e, type: 'bezier' as any })
-                } else {
-                    result.push(e)
-                }
-            }
-            return changed ? result : eds
-        })
-    }, [setEdges])
-
-    // Remove backward edges from state (defense-in-depth) without causing loops
-    useEffect(() => {
-        // inline BFS to compute minimal levels
-        let sourceNodeIds = nodes
-            .filter(node => !edges.some(edge => edge.target === node.id))
-            .map(node => node.id)
-        if (sourceNodeIds.length === 0 && nodes.length > 0) {
-            sourceNodeIds = [nodes[0].id]
-        }
-        const levels: Record<string, number> = {}
-        const queue: { id: string; level: number }[] = []
-        sourceNodeIds.forEach(id => { levels[id] = 0; queue.push({ id, level: 0 }) })
-        while (queue.length > 0) {
-            const { id, level } = queue.shift()!
-            const outgoing = edges.filter(e => e.source === id)
-            outgoing.forEach(e => {
-                const proposed = level + 1
-                if (!(e.target in levels)) { levels[e.target] = proposed; queue.push({ id: e.target, level: proposed }) }
-            })
-        }
-        let hasBackward = false
-        for (const e of edges) {
-            if ((levels[e.target] ?? 0) < (levels[e.source] ?? 0)) { hasBackward = true; break }
-        }
-        if (hasBackward) {
-            setEdges((eds) => eds.filter(e => (levels[e.target] ?? 0) >= (levels[e.source] ?? 0)))
-        }
-    }, [nodes, edges, setEdges])
-
-    const addNode = useCallback(() => {
-        const newNode: Node = {
-            id: `node-${Date.now()}`,
-            type: 'custom',
-            position: {
-                x: Math.random() * 400 + 100,
-                y: Math.random() * 300 + 100
-            },
-            data: { label: `New node` },
-        }
-        setNodes((nds) => nds.concat(newNode))
-        // self-organize after add
-        setTimeout(() => autoLayoutRef.current?.(), 0)
-    }, [setNodes])
-
-    // Initial layout on mount
-    useEffect(() => {
-        autoLayout()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
-
-    // Helper: compute levels with BFS then merge with stableLevels (non-decreasing)
-    const computeLevels = useCallback(() => {
-        // Find source nodes (nodes with no incoming edges). If none (cycle), pick first as fallback.
-        let sourceNodeIds = nodes
-            .filter(node => !edges.some(edge => edge.target === node.id))
-            .map(node => node.id)
-        if (sourceNodeIds.length === 0 && nodes.length > 0) {
-            sourceNodeIds = [nodes[0].id]
-        }
-
-        const levels: Record<string, number> = {}
-        const queue: { id: string; level: number }[] = []
-        sourceNodeIds.forEach(id => {
-            levels[id] = 0
-            queue.push({ id, level: 0 })
-        })
-        while (queue.length > 0) {
-            const { id, level } = queue.shift()!
-            const outgoingEdges = edges.filter(edge => edge.source === id)
-            outgoingEdges.forEach(edge => {
-                const proposed = level + 1
-                // Assign if not assigned yet (first pass); do not lower later
-                if (!(edge.target in levels)) {
-                    levels[edge.target] = proposed
-                    queue.push({ id: edge.target, level: proposed })
-                }
-            })
-        }
-
-        // Merge with stable levels to avoid decreasing a node's column
-        const merged: Record<string, number> = {}
-        nodes.forEach(n => {
-            const computed = levels[n.id] ?? 0
-            const prev = stableLevelsRef.current[n.id]
-            const finalLevel = prev != null ? Math.max(prev, computed) : computed
-            merged[n.id] = finalLevel
-        })
-        stableLevelsRef.current = { ...stableLevelsRef.current, ...merged }
-        return merged
-    }, [nodes, edges])
-
-    // Calculate current layout data for grid display using BFS levels and d3-hierarchy ordering per level
-    // Also assign centered row indices per column so sparse columns are vertically centered.
-    const getLayoutData = useCallback(() => {
-        const levels = computeLevels()
-
-        // Group nodes by level preliminarily
-        const nodesByLevel: { [level: number]: Node[] } = {}
-        nodes.forEach(node => {
-            const level = levels[node.id] ?? 0
-            if (!nodesByLevel[level]) nodesByLevel[level] = []
-            nodesByLevel[level].push(node)
-        })
-
-        // Use d3-hierarchy to compute a tidy order within levels to reduce crossings
-        try {
-            // Build children map from edges
-            const childrenMap = new Map<string, Set<string>>()
-            nodes.forEach(n => childrenMap.set(n.id, new Set<string>()))
-            edges.forEach(e => {
-                if (childrenMap.has(e.source)) childrenMap.get(e.source)!.add(e.target)
-            })
-
-            // Build forest roots
-            // Roots are the minimum-level nodes
-            const minLevel = Math.min(...Object.values(levels))
-            const roots = nodes.filter(n => (levels[n.id] ?? 0) === minLevel).map(n => n.id)
-            const visited = new Set<string>()
-
-            const buildTree = (id: string): any => {
-                if (visited.has(id)) return { id, children: [] }
-                visited.add(id)
-                const children = Array.from(childrenMap.get(id) || [])
-                    .filter(cid => levels[cid] === (levels[id] ?? 0) + 1)
-                    .map(cid => buildTree(cid))
-                return { id, children }
-            }
-
-            const forestChildren: D3Node[] = roots.map(r => buildTree(r))
-            const superRoot: D3Node = { id: '__root__', children: forestChildren }
-            const root = hierarchy<D3Node>(superRoot, d => d.children || [])
-            const layoutTree = tree<D3Node>().separation((a, b) => (a.parent === b.parent ? 1 : 2))
-            const laidOut = layoutTree(root)
-            const xById = new Map<string, number>()
-            laidOut.descendants().forEach((d: HierarchyNode<D3Node>) => {
-                const nid = d.data.id
-                if (nid && nid !== '__root__') {
-                    xById.set(nid, d.x ?? 0)
-                }
-            })
-
-            // Reorder nodes in each level by x
-            Object.keys(nodesByLevel).forEach(lvlStr => {
-                const lvl = Number(lvlStr)
-                nodesByLevel[lvl].sort((a, b) => {
-                    const xa = xById.get(a.id)
-                    const xb = xById.get(b.id)
-                    if (xa == null && xb == null) return a.id.localeCompare(b.id)
-                    if (xa == null) return 1
-                    if (xb == null) return -1
-                    return xa - xb
-                })
-            })
-        } catch (e) {
-            // If anything fails, keep original order
-            // no-op
-        }
-
-        // Calculate max rows across all columns
-        const maxRows = Math.max(...Object.values(nodesByLevel).map(nodes => nodes.length), 1)
-
-        // Center nodes within each column by assigning row indices with an offset
-        const rowIndexByNode: Record<string, number> = {}
-        Object.keys(nodesByLevel).forEach((lvlStr) => {
-            const lvl = Number(lvlStr)
-            const colNodes = nodesByLevel[lvl]
-            const count = colNodes.length
-            const offset = Math.floor((maxRows - count) / 2)
-            colNodes.forEach((n, idx) => {
-                rowIndexByNode[n.id] = offset + idx
-            })
-        })
-
-        // Precompute per-level net height: sum of node heights in that column + vertical padding between them
-        const levelNetHeights: Record<number, number> = {}
-        Object.keys(nodesByLevel).map(Number).forEach(level => {
-            const nodesInLevel = nodesByLevel[level]
-            if (!nodesInLevel || nodesInLevel.length === 0) {
-                levelNetHeights[level] = 0
-                return
-            }
-            const heights = nodesInLevel.map(n => getNodeSize(n).height)
-            const sumHeights = heights.reduce((a, b) => a + b, 0)
-            const gaps = Math.max(0, nodesInLevel.length - 1) * nodePadding
-            levelNetHeights[level] = sumHeights + gaps
-        })
-
-        // Calculate column positions and widths with dynamic spacing relative to next column's net height
-        const columnData: { [level: number]: { x: number; width: number } } = {}
-        let currentX = 50 // Starting X position
-
-        const sortedLevels = Object.keys(nodesByLevel).map(Number).sort((a, b) => a - b)
-        sortedLevels.forEach((level, idx) => {
-            const nodesInLevel = nodesByLevel[level]
-            const nodeWidths = nodesInLevel.map(node => getNodeSize(node).width)
-            const maxNodeWidth = Math.max(...nodeWidths, 120)
-            const columnWidth = maxNodeWidth + columnPadding
-
-            columnData[level] = { x: currentX, width: columnWidth }
-
-            // Spacing to next column depends on the larger of current/next column net heights scaled by spacingFactor
-            const nextLevel = sortedLevels[idx + 1]
-            const nextNet = nextLevel != null ? (levelNetHeights[nextLevel] ?? 0) : 0
-            const curNet = levelNetHeights[level] ?? 0
-            const dynamicSpacing = Math.round(Math.max(curNet, nextNet) * spacingFactor)
-            currentX += columnWidth + (nextLevel != null ? dynamicSpacing : 0)
-        })
-
-        return { columnData, nodesByLevel, maxNodesInAnyLevel: Math.max(...Object.values(nodesByLevel).map(nodes => nodes.length)), rowIndexByNode }
-    }, [nodes, edges, nodePadding, columnPadding, spacingFactor, getNodeSize, computeLevels])
-
-    // Calculate row heights based on tallest node in each row
-    const getRowHeights = useCallback(() => {
-        const { nodesByLevel } = getLayoutData()
-        const maxRows = Math.max(...Object.values(nodesByLevel).map(nodes => nodes.length))
-        const rowHeights: number[] = []
-
-        for (let rowIndex = 0; rowIndex < maxRows; rowIndex++) {
-            let tallestInRow = 40 // Minimum height
-
-            // Check all columns for this row index
-            Object.values(nodesByLevel).forEach(levelNodes => {
-                const n = levelNodes[rowIndex]
-                if (n) {
-                    const { height } = getNodeSize(n)
-                    tallestInRow = Math.max(tallestInRow, height)
-                }
-            })
-
-            rowHeights[rowIndex] = tallestInRow
-        }
-
-        return rowHeights
-    }, [getLayoutData, getNodeSize])
-
-    const autoLayout = useCallback(() => {
-        const levels = computeLevels()
-
-        // Reuse layout data (which uses measured sizes and d3 ordering)
-        const { columnData, rowIndexByNode } = getLayoutData()
-
-        // Position nodes
-        setNodes((nds) =>
-            nds.map(node => {
-                const level = levels[node.id] ?? 0
-                // Use centered row index assigned by getLayoutData so sparse columns are vertically centered
-                const nodeIndex = rowIndexByNode[node.id] ?? 0
-                const column = columnData[level]
-
-                // Prefer measured node size for exact centering
-                const { width: nodeWidth, height: nodeHeight } = getNodeSize(node)
-
-                // Get row heights data
-                const rowHeights = getRowHeights()
-                const tallestHeightInRow = rowHeights[nodeIndex] || nodeHeight
-
-                // Calculate Y position: sum of all previous row heights + current row center
-                const baseY = 100
-                let cumulativeY = baseY
-                for (let i = 0; i < nodeIndex; i++) {
-                    cumulativeY += (rowHeights[i] || 40) + nodePadding
-                }
-
-                const rowCenterY = cumulativeY + tallestHeightInRow / 2 // Center of the current row
-                const centerY = rowCenterY - nodeHeight / 2 // Position node so its center aligns with row center
-
-                // Calculate X position: center the node within the column width
-                // React Flow positions by top-left corner, so offset by half node width to center it
-                const columnCenterX = column ? column.x + column.width / 2 : 50
-                const centerX = columnCenterX - nodeWidth / 2 // Offset by half node width to center the node
-
-                return {
-                    ...node,
-                    position: {
-                        x: centerX,
-                        y: centerY
-                    }
-                }
-            })
-        )
-    }, [nodes, edges, setNodes, nodePadding, columnPadding, getLayoutData, getRowHeights, getNodeSize, computeLevels])
-
-    // keep ref updated
-    useEffect(() => {
-        autoLayoutRef.current = autoLayout
-    }, [autoLayout])
-
-    // Initial layout on mount
-    useEffect(() => {
-        setTimeout(() => autoLayoutRef.current?.(), 0)
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
-
-    return (
-        <div className="min-h-screen bg-gray-950">
-            <style>{`
-        /* Fiber optic base: soft neon blue with outer glow */
-        .edge-fiber {
-          stroke: #3b82f6; /* blue-500 */
-          stroke-width: 2.5;
-          stroke-linejoin: round;
-          stroke-linecap: round;
-          filter: drop-shadow(0 0 2px rgba(59,130,246,0.8)) drop-shadow(0 0 6px rgba(59,130,246,0.5));
-        }
-
-        /* Animated bright pulse traveling along the fiber */
-        .edge-pulse {
-          stroke: #93c5fd; /* blue-300 */
-          stroke-width: 3.5;
-          stroke-linecap: round;
-          stroke-linejoin: round;
-          stroke-dasharray: 24 600; /* short bright pulse followed by long gap */
-          animation: edgePulse forwards linear infinite 2.4s;
-          filter: drop-shadow(0 0 4px rgba(147,197,253,0.9)) drop-shadow(0 0 10px rgba(59,130,246,0.8));
-          mix-blend-mode: screen; /* enhance glow on dark bg */
-        }
-
-        /* Distinct color for forward overrun (skips columns) */
-        .edge-pulse.edge-pulse--overrun {
-          stroke: #22d3ee; /* cyan-400 */
-          filter: drop-shadow(0 0 6px rgba(34,211,238,0.95)) drop-shadow(0 0 12px rgba(34,211,238,0.75));
-          animation-duration: 2s; /* slightly faster */
-        }
-
-        /* Reverse direction for backward edges */
-        .edge-pulse-backward {
-          animation-name: edgePulseReverse;
-        }
-
-        /* Pulse travels from path start (source right handle) to end (target left handle) */
-        @keyframes edgePulse { 
-          0% { stroke-dashoffset: 0; opacity: 0.9; }
-          50% { opacity: 1; }
-          100% { stroke-dashoffset: -620; opacity: 0.9; }
-        }
-
-        /* Reverse: from end toward start */
-        @keyframes edgePulseReverse {
-          0% { stroke-dashoffset: -620; opacity: 0.9; }
-          50% { opacity: 1; }
-          100% { stroke-dashoffset: 0; opacity: 0.9; }
-        }
-      `}</style>
-            {/* Header (fixed overlay) */}
-            <div className="fixed inset-x-0 top-0 z-20 bg-gray-900/80 border-b border-gray-800 backdrop-blur">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <div className="flex justify-between items-center h-16">
-                        <div className="flex items-center space-x-4">
-                            <h1 className="text-xl font-semibold text-yellow-400">
-                                Workflow Designer
-                            </h1>
-                        </div>
-                        <div className="flex items-center space-x-4">
-                            <button
-                                onClick={addNode}
-                                className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-4 py-2 rounded-md text-sm font-medium"
-                            >
-                                Add Node
-                            </button>
-                            {/* Auto Layout button removed as per request */}
-                            <button
-                                onClick={() => setShowConfig(true)}
-                                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-md text-sm font-medium"
-                            >
-                                ⚙️ Config
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Full-screen ReactFlow canvas */}
-            {(() => {
-                // Compute layout and row heights for edge routing data
-                const layoutData = getLayoutData()
-                const rowHeights = getRowHeights()
-
-                // Build map from node id to (colIndex, rowIndex)
-                const nodeIndexMap = new Map<string, { col: number; row: number }>()
-                Object.entries(layoutData.nodesByLevel).forEach(([lvlStr, levelNodes]) => {
-                    const col = Number(lvlStr)
-                    levelNodes.forEach((n) => {
-                        const row = layoutData.rowIndexByNode?.[n.id] ?? 0
-                        nodeIndexMap.set(n.id, { col, row })
-                    })
-                })
-
-                const sanitized = dedupeEdges(edges)
-
-                // Build per-node side channels: source (right) and target (left)
-                const outgoingByNode = new Map<string, Edge[]>()
-                const incomingByNode = new Map<string, Edge[]>()
-                sanitized.forEach((e) => {
-                    if (!outgoingByNode.has(e.source)) outgoingByNode.set(e.source, [])
-                    if (!incomingByNode.has(e.target)) incomingByNode.set(e.target, [])
-                    outgoingByNode.get(e.source)!.push(e)
-                    incomingByNode.get(e.target)!.push(e)
-                })
-                // Sort edges on each side by opposite row, ensure stable order
-                outgoingByNode.forEach((arr) => {
-                    arr.sort((a, b) => {
-                        const ta = nodeIndexMap.get(a.target)!, tb = nodeIndexMap.get(b.target)!
-                        return ta.row - tb.row || a.id.localeCompare(b.id)
-                    })
-                })
-                incomingByNode.forEach((arr) => {
-                    arr.sort((a, b) => {
-                        const sa = nodeIndexMap.get(a.source)!, sb = nodeIndexMap.get(b.source)!
-                        return sa.row - sb.row || a.id.localeCompare(b.id)
-                    })
-                })
-
-                // Precompute row bottoms and lane positions (lane below each row)
-                const rowBottoms: number[] = []
-                {
-                    let cumulative = 100
-                    for (let i = 0; i < rowHeights.length; i++) {
-                        const bottom = cumulative + rowHeights[i]
-                        rowBottoms[i] = bottom
-                        cumulative = bottom + nodePadding
-                    }
-                }
-                const laneYBelowRow = (rowIndex: number) => rowBottoms[rowIndex] + nodePadding / 2
-
-                const derivedEdges = sanitized.map((e) => {
-                    const s = nodeIndexMap.get(e.source)
-                    const t = nodeIndexMap.get(e.target)
-                    const isBackwards = !!(s && t && t.col < s.col)
-                    let isForwardOverrun = false
-                    let arcY: number | undefined
-                    let arcXMid: number | undefined
-                    if (s && t) {
-                        const colGap = Math.abs(s.col - t.col)
-                        const sameRow = s.row === t.row
-                        if (!isBackwards && sameRow && colGap > 1) {
-                            isForwardOverrun = true
-                        } else if (!isBackwards && !sameRow && colGap > 1) {
-                            isForwardOverrun = true
-                        }
-                        // If skipping at least one column forward, arc above the entire intermediate column(s)
-                        if (!isBackwards && colGap > 1) {
-                            // Compute a Y above all rows: base (100) minus lift
-                            const totalHeight = rowHeights.reduce((sum, h) => sum + h, 0) + nodePadding * (rowHeights.length - 1)
-                            const topY = 100
-                            // Base lift above the top by 20% of total height, min 80px
-                            const baseLift = Math.max(80, totalHeight * 0.2)
-                            // Extra lift per additional skipped column to keep farther targets arcing higher
-                            const avgRow = rowHeights.length ? (rowHeights.reduce((a, b) => a + b, 0) / rowHeights.length) : 60
-                            const extraLift = (colGap - 1) * Math.max(40, avgRow * 0.5)
-                            arcY = Math.max(topY - (baseLift + extraLift), 20)
-                            // Apex X: center between source and target X column centers
-                            const sCol = layoutData.columnData[s.col]
-                            const tCol = layoutData.columnData[t.col]
-                            if (sCol && tCol) {
-                                const sCenter = sCol.x + sCol.width / 2
-                                const tCenter = tCol.x + tCol.width / 2
-                                arcXMid = (sCenter + tCenter) / 2
-                            }
-                        }
-                    }
-
-                    return {
-                        ...e,
-                        type: 'pulseBezier' as any,
-                        data: { isBackwards, isForwardOverrun, arcY, arcXMid },
-                    }
-                })
-
-                return (
-                    <div className="fixed inset-0">
-                        <ReactFlow
-                            nodes={nodes}
-                            edges={derivedEdges}
-                            onNodesChange={onNodesChange}
-                            onEdgesChange={onEdgesChange}
-                            onConnect={onConnect}
-                            onConnectStart={onConnectStart}
-                            onConnectEnd={onConnectEnd}
-                            onNodeDragStop={() => {
-                                if (!lockNodes) setTimeout(() => autoLayoutRef.current?.(), 0)
-                            }}
-                            nodeTypes={nodeTypes}
-                            edgeTypes={edgeTypes}
-                            className="bg-gray-950"
-                            nodesDraggable={!lockNodes}
-                            panOnDrag={true}
-                            zoomOnScroll={true}
-                            zoomOnPinch={true}
-                            zoomOnDoubleClick={true}
-                            minZoom={0.25}
-                            maxZoom={1.75}
-                            proOptions={{ hideAttribution: true }}
-                        >
-                            <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="#334155" />
-                            <Controls className="bg-gray-800 border-gray-700" />
-                        </ReactFlow>
-                    </div>
-                )
-            })()}
-
-            {/* Configuration Modal */}
-            {showConfig && (
-                <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-96">
-                        <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-lg font-semibold text-yellow-400">Configuration</h2>
-                            <button
-                                onClick={() => setShowConfig(false)}
-                                className="text-gray-400 hover:text-gray-200"
-                            >
-                                ✕
-                            </button>
-                        </div>
-
-                        <div className="space-y-4">
-                            <div>
-                                <label className="flex items-center space-x-2">
-                                    <input
-                                        type="checkbox"
-                                        checked={lockNodes}
-                                        onChange={(e) => setLockNodes(e.target.checked)}
-                                        className="rounded border-gray-600 text-yellow-400 focus:ring-yellow-400"
-                                    />
-                                    <span className="text-sm font-medium text-gray-200">Lock Nodes (disable dragging)</span>
-                                </label>
-                                <p className="text-xs text-gray-400 mt-1">
-                                    Keep nodes positioned by auto-layout. Uncheck to allow dragging (will re-snap on release).
-                                </p>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-200 mb-2">
-                                    Node Padding (pixels)
-                                </label>
-                                <input
-                                    type="number"
-                                    value={nodePadding}
-                                    onChange={(e) => setNodePadding(Number(e.target.value))}
-                                    min="10"
-                                    max="200"
-                                    className="w-full bg-gray-800 text-gray-200 border border-gray-600 hover:border-yellow-400 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 px-3 py-2 rounded-md"
-                                />
-                                <p className="text-xs text-gray-400 mt-1">
-                                    Vertical spacing between nodes in same column (10-200px)
-                                </p>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-200 mb-2">
-                                    Column Spacing Factor
-                                </label>
-                                <input
-                                    type="range"
-                                    value={spacingFactor}
-                                    onChange={(e) => setSpacingFactor(Number(e.target.value))}
-                                    min="0.1"
-                                    max="0.6"
-                                    step="0.05"
-                                    className="w-full"
-                                />
-                                <p className="text-xs text-gray-400 mt-1">
-                                    Spacing = next column net height × factor (0.10–0.60). Current: {Math.round(spacingFactor * 100)}%
-                                </p>
-                            </div>
-
-                            <div>
-                                <label className="block text-sm font-medium text-gray-200 mb-2">
-                                    Column Padding (pixels)
-                                </label>
-                                <input
-                                    type="number"
-                                    value={columnPadding}
-                                    onChange={(e) => setColumnPadding(Number(e.target.value))}
-                                    min="20"
-                                    max="100"
-                                    className="w-full bg-gray-800 text-gray-200 border border-gray-600 hover:border-yellow-400 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 px-3 py-2 rounded-md"
-                                />
-                                <p className="text-xs text-gray-400 mt-1">
-                                    Extra padding around widest node in column (20-100px)
-                                </p>
-                            </div>
-                        </div>
-
-                        <div className="flex justify-end space-x-3 mt-6">
-                            <button
-                                onClick={() => setShowConfig(false)}
-                                className="bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded-md text-sm font-medium"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={() => {
-                                    autoLayout()
-                                    setShowConfig(false)
-                                }}
-                                className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-4 py-2 rounded-md text-sm font-medium"
-                            >
-                                Apply & Layout
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
-    )
-}
-
-// Wrapper component with ReactFlow provider
 export default function WorkflowPage() {
     return (
         <ReactFlowProvider>
-            <WorkflowContent />
+            <WorkflowInner />
         </ReactFlowProvider>
     )
 }
