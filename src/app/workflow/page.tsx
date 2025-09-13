@@ -5,6 +5,7 @@ import ReactFlow, {
     Background,
     Controls,
     Edge,
+    type Connection,
     Node,
     ReactFlowProvider,
     Handle,
@@ -328,6 +329,7 @@ function WorkflowInner() {
     const [layoutConfig, setLayoutConfig] = useState<LayoutCfg>({ baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 })
     const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
     const [menuTarget, setMenuTarget] = useState<{ kind: 'node' | 'edge'; id: string } | null>(null)
+    const [configOpen, setConfigOpen] = useState(false)
     // Re-enable auto-layout; it will pause while editing
     const AUTO_LAYOUT = true
 
@@ -526,13 +528,24 @@ function WorkflowInner() {
     // If a valid connection was made, add it and mark didConnect
     const onConnect = useCallback<OnConnect>(
         (connection) => {
+            // Prevent backward connections (target must be at a higher level than source)
+            if (connection.source && connection.target) {
+                const levels = computeLevels(nodes, edges)
+                const srcL = levels[connection.source] ?? 0
+                const tgtL = levels[connection.target] ?? 0
+                if (tgtL <= srcL) {
+                    setSaveMsg('Backward connections are not allowed')
+                    setTimeout(() => setSaveMsg(null), 2000)
+                    return
+                }
+            }
             setEdges((eds) => {
                 const edgeId = generateUuid()
                 return addEdge({ id: edgeId, ...connection, type: 'editableLabel', data: { label: '' } } as any, eds)
             })
             setDidConnect(true)
         },
-        [setEdges]
+        [setEdges, nodes, edges]
     )
 
     // If connection ended on empty pane, create a new node and connect to it
@@ -732,25 +745,27 @@ function WorkflowInner() {
         }
     }, [edges, nodes, normalizeIdsIfNeeded, selectedOrgId])
 
+    // Validate new connections to avoid backwards links
+    const isValidConnection = useCallback((conn: Connection) => {
+        if (!conn.source || !conn.target) return true
+        const levels = computeLevels(nodes, edges)
+        return (levels[conn.target] ?? 0) > (levels[conn.source] ?? 0)
+    }, [nodes, edges])
+
     return (
         <div className="h-screen w-screen bg-gray-950">
             <div className="absolute inset-x-0 top-0 z-10 h-12 border-b border-gray-800 bg-gray-900/80 backdrop-blur flex items-center justify-between px-4">
                 <div className="text-yellow-400 font-medium">Workflow Designer</div>
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-2 mr-2 text-xs text-gray-300">
-                        <label className="flex items-center gap-1">Col gap
-                            <input type="number" className="w-16 bg-gray-800 border border-gray-700 rounded px-1 py-0.5"
-                                value={layoutConfig.colGap}
-                                onChange={(e) => setLayoutConfig((c) => ({ ...c, colGap: Number(e.target.value) }))} />
-                        </label>
-                        <label className="flex items-center gap-1">Row pad
-                            <input type="number" className="w-16 bg-gray-800 border border-gray-700 rounded px-1 py-0.5"
-                                value={layoutConfig.rowPadding}
-                                onChange={(e) => setLayoutConfig((c) => ({ ...c, rowPadding: Number(e.target.value) }))} />
-                        </label>
-                    </div>
                     <button onClick={load} className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded">
                         Reload
+                    </button>
+                    <button
+                        onClick={(e) => { e.stopPropagation(); setConfigOpen((v) => !v) }}
+                        className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
+                        title="Layout configuration"
+                    >
+                        Config
                     </button>
                     <button
                         onClick={saveChanges}
@@ -761,6 +776,37 @@ function WorkflowInner() {
                     </button>
                 </div>
             </div>
+            {configOpen && (
+                <div className="absolute top-12 right-4 z-20 w-72 rounded border border-gray-800 bg-gray-900/95 backdrop-blur p-3 shadow-lg" onClick={(e) => e.stopPropagation()}>
+                    <div className="text-xs text-gray-300 mb-2">Layout config</div>
+                    <div className="flex flex-col gap-2 text-xs text-gray-200">
+                        <label
+                            className="flex items-center justify-between gap-2"
+                            title="Horizontal space between columns in pixels. The widest node per level sets the column width; this adds extra space between columns."
+                        >
+                            <span>Col gap</span>
+                            <input
+                                type="number"
+                                className="w-24 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-right"
+                                value={layoutConfig.colGap}
+                                onChange={(e) => setLayoutConfig((c) => ({ ...c, colGap: Number(e.target.value) }))}
+                            />
+                        </label>
+                        <label
+                            className="flex items-center justify-between gap-2"
+                            title="Vertical space between nodes within the same column (pixels). Rows are sized by actual node heights; this adds padding between them."
+                        >
+                            <span>Row pad</span>
+                            <input
+                                type="number"
+                                className="w-24 bg-gray-800 border border-gray-700 rounded px-1 py-0.5 text-right"
+                                value={layoutConfig.rowPadding}
+                                onChange={(e) => setLayoutConfig((c) => ({ ...c, rowPadding: Number(e.target.value) }))}
+                            />
+                        </label>
+                    </div>
+                </div>
+            )}
             <div className="pt-12 h-full">
                 {error ? (
                     <div className="text-red-400 p-3">{error}</div>
@@ -778,6 +824,7 @@ function WorkflowInner() {
                         onConnectStart={onConnectStart}
                         onConnectEnd={onConnectEnd}
                         onConnect={onConnect}
+                        isValidConnection={isValidConnection}
                         nodeTypes={nodeTypes}
                         edgeTypes={edgeTypes}
                                      nodesDraggable
