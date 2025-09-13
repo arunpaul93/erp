@@ -12,6 +12,7 @@ export default function HomePage() {
   const cards = [
     { title: 'Business Plan', desc: 'Strategic goals and initiatives.', path: '/business-plan' },
     { title: 'Structure Graph', desc: 'Visualize organizational structure and relationships.', path: '/structure-graph' },
+  { title: 'Process Flow Editor', desc: 'Design and manage process flows.', path: '/process-flow-new' },
     { title: 'Permissions', desc: 'Manage user roles and permissions.', path: '/permissions' },
     { title: 'Employees', desc: 'Manage employees and assignments.', path: '/employee_organisation' },
     { title: 'Shift Templates', desc: 'Employee shift templates (salon).', path: '/salon/employee_shift_template' },
