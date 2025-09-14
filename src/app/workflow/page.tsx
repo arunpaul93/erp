@@ -44,8 +44,7 @@ function SideNode(
         expanded?: boolean
         onToggleExpand?: () => void
     }>
-)
-{
+) {
     const { id, data, selected } = props
     const [isEditing, setIsEditing] = useState(false)
     const [value, setValue] = useState<string>(data?.label ?? 'Step')
@@ -136,7 +135,7 @@ function SideNode(
                 width: (data as any)?.expanded && contW ? contW : undefined,
                 height: (data as any)?.expanded && contH ? contH : undefined,
             }}
-    >
+        >
             <Handle type="target" position={Position.Left} className="!w-2 !h-2 !bg-slate-400" />
             {/* expand/collapse removed */}
             {/* Header/title (always non-transparent) */}
@@ -389,7 +388,7 @@ function layout(
             const levelsKids = computeLevels(kids, kidEdges)
             const byLevelKids = orderWithinLevels(levelsKids, kids, kidEdges)
             const levelKeys = Array.from(byLevelKids.keys()).sort((a, b) => a - b)
-            const columnsKids: Node[] [] = levelKeys.map((L) => byLevelKids.get(L) || [])
+            const columnsKids: Node[][] = levelKeys.map((L) => byLevelKids.get(L) || [])
             const colW = columnsKids.map((arr) => Math.max(1, ...arr.map((x) => sizes.find((s) => s.id === x.id)!.w)))
             const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
             const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
@@ -432,8 +431,8 @@ function layout(
                 childPos.set(s.id, { x: cx, y: cy })
                 cy += s.h + rowGapInside
             }
-    }
-    container.set(n.id, { w: contW, h: contH, childPos, childIds: new Set(kids.map((k) => k.id)) })
+        }
+        container.set(n.id, { w: contW, h: contH, childPos, childIds: new Set(kids.map((k) => k.id)) })
     }
 
     // Build columns from level ordering, then remove any contained children of expanded parents from whatever column they appear in
@@ -573,6 +572,8 @@ function WorkflowInner() {
     // Track expanded container nodes
     const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set())
     const [configOpen, setConfigOpen] = useState(false)
+    // Global toggle to animate edges
+    const [animateEdges, setAnimateEdges] = useState<boolean>(false)
     // Re-enable auto-layout; it will pause while editing
     const AUTO_LAYOUT = true
 
@@ -584,15 +585,30 @@ function WorkflowInner() {
                 const arr: string[] = JSON.parse(raw)
                 if (Array.isArray(arr)) setExpandedNodeIds(new Set(arr))
             }
-        } catch {}
+        } catch { }
     }, [])
 
     // Persist expanded containers
     useEffect(() => {
         try {
             localStorage.setItem('workflow.expanded', JSON.stringify(Array.from(expandedNodeIds)))
-        } catch {}
+        } catch { }
     }, [expandedNodeIds])
+
+    // Restore edge animation preference
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('workflow.animateEdges')
+            if (raw != null) setAnimateEdges(raw === 'true')
+        } catch { }
+    }, [])
+
+    // Persist edge animation preference
+    useEffect(() => {
+        try {
+            localStorage.setItem('workflow.animateEdges', animateEdges ? 'true' : 'false')
+        } catch { }
+    }, [animateEdges])
 
     // Centralized relayout using current state
     const relayoutNow = useCallback(() => {
@@ -711,18 +727,46 @@ function WorkflowInner() {
                 .eq('organisation_id', selectedOrgId)
                 .is('parent_step_id', null)
             if (sErr) throw sErr
-            const { data: flows, error: fErr } = await supabase
-                .from('process_flow_edge')
-                .select('id, from_step_id, to_step_id, label, metadata')
-                .eq('organisation_id', selectedOrgId)
-            if (fErr) throw fErr
-
-            const rfNodes: Node[] = (steps || []).map((s: any) => ({
+            // Start with roots
+            const rootNodes: Node[] = (steps || []).map((s: any) => ({
                 id: String(s.id),
                 data: { label: s.name || 'Step', parentId: s.parent_step_id ? String(s.parent_step_id) : null },
                 position: { x: 0, y: 0 },
                 type: 'side',
             }))
+            const rfNodes: Node[] = [...rootNodes]
+            const nodeById = new Map<string, Node>(rfNodes.map((n) => [n.id, n]))
+
+            // Eagerly fetch children for any nodes persisted as expanded (supports nested expanded)
+            const toVisit: string[] = rfNodes.filter((n) => expandedNodeIds.has(n.id)).map((n) => n.id)
+            const visited = new Set<string>()
+            while (toVisit.length) {
+                const pid = toVisit.shift()!
+                if (visited.has(pid)) continue
+                visited.add(pid)
+                // fetch direct children
+                const { data: childSteps, error: cErr } = await supabase
+                    .from('process_step')
+                    .select('id, name, description, metadata, parent_step_id')
+                    .eq('organisation_id', selectedOrgId)
+                    .eq('parent_step_id', pid)
+                if (cErr) throw cErr
+                const newChildren: Node[] = (childSteps || []).map((s: any) => ({
+                    id: String(s.id),
+                    data: { label: s.name || 'Step', parentId: s.parent_step_id ? String(s.parent_step_id) : null },
+                    position: { x: 0, y: 0 },
+                    type: 'side',
+                }))
+                for (const cn of newChildren) {
+                    if (!nodeById.has(cn.id)) {
+                        nodeById.set(cn.id, cn)
+                        rfNodes.push(cn)
+                        // If child itself is marked expanded, queue it
+                        if (expandedNodeIds.has(cn.id)) toVisit.push(cn.id)
+                    }
+                }
+            }
+
             // Determine which fetched nodes have children
             const rootIds = rfNodes.map((n) => n.id)
             if (rootIds.length) {
@@ -737,16 +781,26 @@ function WorkflowInner() {
                     (n.data as any).hasChildren = hasChildSet.has(n.id)
                 })
             }
-            const rfEdgesAll: Edge[] = (flows || []).map((e: any) => ({
-                id: String(e.id),
-                source: String(e.from_step_id),
-                target: String(e.to_step_id),
-                type: 'editableLabel',
-                data: { label: e.label || '' },
-            }))
-            // Only keep edges whose endpoints are present in the fetched nodes
+            // Fetch edges among the fetched nodes only (internal/visible relations)
             const nodeIdSet = new Set(rfNodes.map((n) => n.id))
-            const rfEdges: Edge[] = rfEdgesAll.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
+            let rfEdges: Edge[] = []
+            if (nodeIdSet.size) {
+                const idArr = Array.from(nodeIdSet)
+                const { data: flows2, error: fErr2 } = await supabase
+                    .from('process_flow_edge')
+                    .select('id, from_step_id, to_step_id, label, metadata')
+                    .eq('organisation_id', selectedOrgId)
+                    .in('from_step_id', idArr)
+                    .in('to_step_id', idArr)
+                if (fErr2) throw fErr2
+                rfEdges = (flows2 || []).map((e: any) => ({
+                    id: String(e.id),
+                    source: String(e.from_step_id),
+                    target: String(e.to_step_id),
+                    type: 'editableLabel',
+                    data: { label: e.label || '' },
+                }))
+            }
             // Layout only visible nodes (respect expanded containers) and hide others
             const visible = computeVisibleNodeIds(rfNodes, expandedNodeIds)
             const rfNodesForLayout = rfNodes.filter((n) => visible.has(n.id))
@@ -934,7 +988,7 @@ function WorkflowInner() {
             const base: Edge = {
                 ...e,
                 type: 'editableLabel',
-                data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu },
+                data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu, animated: animateEdges },
             }
             if (!selectedContainerId) return base
             const sIn = insideSelected.has(e.source)
@@ -944,7 +998,7 @@ function WorkflowInner() {
             const visible = isConnectedToContainer || isInternal
             return { ...base, hidden: !visible }
         }) as Edge[]
-    }, [edges, nodes, expandedNodeIds, onEdgeLabelCommit, onEdgeEditingChange, onOpenEdgeMenu])
+    }, [edges, nodes, expandedNodeIds, onEdgeLabelCommit, onEdgeEditingChange, onOpenEdgeMenu, animateEdges])
 
     // Handle delete key for selected nodes/edges
     useEffect(() => {
@@ -1051,7 +1105,7 @@ function WorkflowInner() {
                     const all = rf.getNodes()
                     const group = all.filter((n) => n.id === parentPid || (n.data as any)?.parentId === parentPid)
                     if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
-                } catch {}
+                } catch { }
                 const { nodes: laid } = layout(rf.getNodes(), rf.getEdges(), layoutConfig, expandedNodeIds)
                 animateToLayout(laid, 260)
             }, 0)
@@ -1412,7 +1466,7 @@ function WorkflowInner() {
                 const all = rf.getNodes()
                 const group = all.filter((n) => n.id === nodeId || (n.data as any)?.parentId === nodeId)
                 if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
-            } catch {}
+            } catch { }
             // Animate to final layout after insertion (expand). Use up-to-date expanded set.
             {
                 // Sanitize for layout: only expanded nodes should have container sizes considered.
@@ -1476,15 +1530,19 @@ function WorkflowInner() {
             <div className="absolute inset-x-0 top-0 z-10 h-12 border-b border-gray-800 bg-gray-900/80 backdrop-blur flex items-center justify-between px-4">
                 <div className="text-yellow-400 font-medium">Workflow Designer</div>
                 <div className="flex items-center gap-2">
-                    <button onClick={load} className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded">
-                        Reload
-                    </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); setConfigOpen((v) => !v) }}
                         className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
                         title="Layout configuration"
                     >
                         Config
+                    </button>
+                    <button
+                        onClick={() => setAnimateEdges((v) => !v)}
+                        className={`px-3 py-1.5 text-sm rounded text-white ${animateEdges ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-gray-700 hover:bg-gray-600'}`}
+                        title="Toggle animated edge flow"
+                    >
+                        Edges: {animateEdges ? 'On' : 'Off'}
                     </button>
                     <button
                         onClick={saveChanges}
