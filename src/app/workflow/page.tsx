@@ -182,12 +182,16 @@ function SideNode(
                     ) : (
                         <div
                             className={
-                                // For children inside expanded containers, allow wrapping so height grows dynamically
-                                (data as any)?.childOfExpanded
+                                // For children inside expanded containers, allow wrapping UNLESS the child itself is expanded (container)
+                                (data as any)?.childOfExpanded && !(data as any)?.expanded
                                     ? 'text-sm whitespace-pre-wrap break-words leading-snug cursor-pointer'
                                     : 'text-sm whitespace-nowrap overflow-hidden text-ellipsis leading-snug cursor-pointer'
                             }
-                            style={{ maxWidth: (data as any)?.childOfExpanded && (data as any)?.wrapW ? Math.max(64, ((data as any).wrapW as number) - 24) : undefined }}
+                            style={{ 
+                                maxWidth: (data as any)?.childOfExpanded && (data as any)?.wrapW && !(data as any)?.expanded 
+                                    ? Math.max(64, ((data as any).wrapW as number) - 24) 
+                                    : undefined 
+                            }}
                             onDoubleClick={requestEdit}
                         >
                             {data?.label ?? 'Step'}
@@ -314,7 +318,13 @@ function estimateNodeWidth(n: Node) {
     const charW = 7.5 // approx for text-sm
     const padding = 24 // px-3 on both sides ~ 12*2
     const minW = 128 // Tailwind min-w-32
-    return Math.max(minW, Math.ceil(longestLine * charW + padding))
+    
+    // Check if this node is expanded (has children and expanded state)
+    const isExpanded = (n.data as any)?.expanded === true
+    const expandedBonus = isExpanded ? 60 : 0 // Add extra width when expanded for better readability
+    
+    const baseWidth = Math.max(minW, Math.ceil(longestLine * charW + padding))
+    return baseWidth + expandedBonus
 }
 
 function estimateNodeHeight(n: Node, wrapWidth?: number) {
