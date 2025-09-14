@@ -577,6 +577,9 @@ function WorkflowInner() {
     // Re-enable auto-layout; it will pause while editing
     const AUTO_LAYOUT = true
 
+    // Add a new root-level node (no parent) — defined later after helpers
+    let addRootNode = (() => {}) as any
+
     // Restore expanded containers from localStorage (so expansions persist until collapsed)
     useEffect(() => {
         try {
@@ -715,6 +718,137 @@ function WorkflowInner() {
     // Track deletions to persist
     const deletedNodeIdsRef = useRef<Set<string>>(new Set())
     const deletedEdgeIdsRef = useRef<Set<string>>(new Set())
+
+    // Expand all: eagerly load all children for nodes with children (recursively) and animate
+    const expandAll = useCallback(async () => {
+        try {
+            // Start from any node that has children
+            const startIds = nodes.filter((n) => (n.data as any)?.hasChildren).map((n) => n.id)
+            const nextExpanded = new Set<string>(startIds)
+            setExpandedNodeIds(nextExpanded)
+            if (!selectedOrgId || startIds.length === 0) {
+                // No org or nothing to expand: just relayout
+                const visible = computeVisibleNodeIds(nodes, nextExpanded)
+                const useNodes = nodes.filter((n) => visible.has(n.id))
+                const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+                const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, nextExpanded)
+                animateToLayout(laid, 260)
+                return
+            }
+
+            // Build maps from current state
+            const nodeById = new Map<string, Node>(nodes.map((n) => [n.id, n]))
+            const toVisit: string[] = [...startIds]
+            const visited = new Set<string>()
+            const allNewChildren: Node[] = []
+
+            while (toVisit.length) {
+                const batchPid = toVisit.shift()!
+                if (visited.has(batchPid)) continue
+                visited.add(batchPid)
+
+                // Fetch direct children for this parent
+                const { data: childSteps, error: cErr } = await supabase
+                    .from('process_step')
+                    .select('id, name, parent_step_id')
+                    .eq('organisation_id', selectedOrgId)
+                    .eq('parent_step_id', batchPid)
+                if (cErr) throw cErr
+
+                const children = (childSteps || []).map((s: any) => ({
+                    id: String(s.id),
+                    data: { label: s.name || 'Step', parentId: String(s.parent_step_id) },
+                    position: { x: 0, y: 0 },
+                    type: 'side' as const,
+                }))
+                // Add new children to map and pending list
+                const newIds: string[] = []
+                for (const ch of children) {
+                    if (!nodeById.has(ch.id)) {
+                        nodeById.set(ch.id, ch as unknown as Node)
+                        allNewChildren.push(ch as unknown as Node)
+                        newIds.push(ch.id)
+                    }
+                }
+                if (newIds.length) {
+                    // Determine which of the new children themselves have children
+                    const { data: grandRows, error: gErr } = await supabase
+                        .from('process_step')
+                        .select('parent_step_id')
+                        .eq('organisation_id', selectedOrgId)
+                        .in('parent_step_id', newIds)
+                    if (gErr) throw gErr
+                    const hasChildSet = new Set<string>((grandRows || []).map((r: any) => String(r.parent_step_id)))
+                    // Annotate hasChildren for both new and existing nodes appropriately
+                    for (const id of newIds) {
+                        const nodeEntry = nodeById.get(id)
+                        if (!nodeEntry) continue
+                        ;(nodeEntry.data as any).hasChildren = hasChildSet.has(id)
+                        if (hasChildSet.has(id)) {
+                            nextExpanded.add(id) // expand containers so recurse continues
+                            toVisit.push(id)
+                        }
+                    }
+                }
+            }
+
+            // Fetch edges among the union of existing + newly added nodes
+            let newEdges: Edge[] = []
+            const allNodeIds = Array.from(nodeById.keys())
+            if (allNodeIds.length) {
+                const { data: edgeRows, error: eErr } = await supabase
+                    .from('process_flow_edge')
+                    .select('id, from_step_id, to_step_id, label')
+                    .eq('organisation_id', selectedOrgId)
+                    .in('from_step_id', allNodeIds)
+                    .in('to_step_id', allNodeIds)
+                if (eErr) throw eErr
+                newEdges = (edgeRows || []).map((e: any) => ({
+                    id: String(e.id),
+                    source: String(e.from_step_id),
+                    target: String(e.to_step_id),
+                    type: 'editableLabel',
+                    data: { label: e.label || '' },
+                }))
+            }
+
+            // Commit nodes/edges
+            if (allNewChildren.length) setNodes((nds) => nds.concat(allNewChildren))
+            if (newEdges.length) setEdges((eds) => {
+                const exist = new Set(eds.map((e) => e.id))
+                return eds.concat(newEdges.filter((e) => !exist.has(e.id)))
+            })
+            // Animate to final layout
+            const visible = computeVisibleNodeIds(Array.from(nodeById.values()), nextExpanded)
+            const useNodes = Array.from(nodeById.values()).filter((n) => visible.has(n.id))
+            const useEdges = (newEdges.length ? newEdges : edges).filter((e) => visible.has(e.source) && visible.has(e.target))
+            const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, nextExpanded)
+            animateToLayout(laid, 300)
+        } catch (err) {
+            console.error('Expand all failed', err)
+        }
+    }, [nodes, edges, layoutConfig, selectedOrgId, setNodes, setEdges, animateToLayout])
+
+    // Define addRootNode here (after generateUuid and animateToLayout are available)
+    addRootNode = useCallback(() => {
+        const id = generateUuid()
+        const node: Node = {
+            id,
+            type: 'side',
+            data: { label: 'New Step', parentId: null },
+            position: { x: layoutConfig.baseX, y: layoutConfig.baseY },
+        }
+        setNodes((nds) => nds.concat(node))
+        setTimeout(() => {
+            const allNodes = rf.getNodes()
+            const allEdges = rf.getEdges()
+            const visible = computeVisibleNodeIds(allNodes, expandedNodeIds)
+            const useNodes = allNodes.filter((n) => visible.has(n.id))
+            const useEdges = allEdges.filter((e) => visible.has(e.source) && visible.has(e.target))
+            const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
+            animateToLayout(laid, 240)
+        }, 0)
+    }, [generateUuid, setNodes, rf, layoutConfig, expandedNodeIds, animateToLayout])
 
     const load = useCallback(async () => {
         if (!selectedOrgId) return
@@ -1596,11 +1730,51 @@ function WorkflowInner() {
                 <div className="text-yellow-400 font-medium">Workflow Designer</div>
                 <div className="flex items-center gap-2">
                     <button
+                        onClick={() => { void expandAll() }}
+                        className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
+                        title="Expand all containers"
+                    >
+                        Expand all
+                    </button>
+                    <button
+                        onClick={() => {
+                            const none = new Set<string>()
+                            setExpandedNodeIds(none)
+                            // Clear container sizing so collapsed nodes shrink immediately
+                            setNodes((nds) => nds.map((n) => {
+                                if ((n.data as any)?.containerW || (n.data as any)?.containerH) {
+                                    const d: any = n.data || {}
+                                    const { containerW, containerH, ...rest } = d
+                                    return { ...n, data: rest }
+                                }
+                                return n
+                            }))
+                            setTimeout(() => {
+                                const visible = computeVisibleNodeIds(nodes, none)
+                                const useNodes = nodes.filter((n) => visible.has(n.id))
+                                const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+                                const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, none)
+                                animateToLayout(laid, 260)
+                            }, 0)
+                        }}
+                        className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
+                        title="Collapse all containers"
+                    >
+                        Collapse all
+                    </button>
+                    <button
                         onClick={(e) => { e.stopPropagation(); setConfigOpen((v) => !v) }}
                         className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-white rounded"
                         title="Layout configuration"
                     >
                         Config
+                    </button>
+                    <button
+                        onClick={addRootNode}
+                        className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 text-white rounded"
+                        title="Add a new root process"
+                    >
+                        Add node
                     </button>
                     <button
                         onClick={() => setAnimateEdges((v) => !v)}
