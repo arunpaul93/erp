@@ -187,10 +187,10 @@ function SideNode(
                                     ? 'text-sm whitespace-pre-wrap break-words leading-snug cursor-pointer'
                                     : 'text-sm whitespace-nowrap overflow-hidden text-ellipsis leading-snug cursor-pointer'
                             }
-                            style={{ 
-                                maxWidth: (data as any)?.childOfExpanded && (data as any)?.wrapW && !(data as any)?.expanded 
-                                    ? Math.max(64, ((data as any).wrapW as number) - 24) 
-                                    : undefined 
+                            style={{
+                                maxWidth: (data as any)?.childOfExpanded && (data as any)?.wrapW && !(data as any)?.expanded
+                                    ? Math.max(64, ((data as any).wrapW as number) - 24)
+                                    : undefined
                             }}
                             onDoubleClick={requestEdit}
                         >
@@ -318,11 +318,11 @@ function estimateNodeWidth(n: Node) {
     const charW = 7.5 // approx for text-sm
     const padding = 24 // px-3 on both sides ~ 12*2
     const minW = 128 // Tailwind min-w-32
-    
+
     // Check if this node is expanded (has children and expanded state)
     const isExpanded = (n.data as any)?.expanded === true
     const expandedBonus = isExpanded ? 60 : 0 // Add extra width when expanded for better readability
-    
+
     const baseWidth = Math.max(minW, Math.ceil(longestLine * charW + padding))
     return baseWidth + expandedBonus
 }
@@ -898,19 +898,19 @@ function WorkflowInner() {
                 const exist = new Set(eds.map((e) => e.id))
                 return eds.concat(newEdges.filter((e) => !exist.has(e.id)))
             })
-            
+
             // Wait for nodes to be added to state, then set up container sizing
             setTimeout(() => {
                 const currentNodes = rf.getNodes()
                 const currentEdges = rf.getEdges()
-                
+
                 // For each expanded node, ensure it has proper container sizing and child positioning
                 setNodes((nds) => nds.map((n) => {
                     if (!nextExpanded.has(n.id)) return n
-                    
+
                     const children = nds.filter((child) => (child.data as any)?.parentId === n.id)
                     if (children.length === 0) return n
-                    
+
                     // Compute container sizing for this parent
                     const innerPadX = 16, innerPadY = 12, headerH = 22
                     const rowGapInside = layoutConfig.rowPadding
@@ -935,7 +935,7 @@ function WorkflowInner() {
                         const innerH = Math.max(0, ...colH)
                         contW = Math.max(contW, innerPadX * 2 + innerW)
                         contH = Math.max(contH, headerH + layoutConfig.rowPadding + innerH + innerPadY)
-                        
+
                         // Position children
                         const availableInnerW = Math.max(0, (contW - innerPadX * 2))
                         const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
@@ -959,7 +959,7 @@ function WorkflowInner() {
                         const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
                         contW = Math.max(contW, maxChildW + innerPadX * 2)
                         contH = Math.max(contH, headerH + layoutConfig.rowPadding + childrenTotalH + innerPadY)
-                        
+
                         // Position children vertically
                         let cy = headerH + layoutConfig.rowPadding
                         for (const child of children) {
@@ -969,33 +969,33 @@ function WorkflowInner() {
                             cy += s.h + rowGapInside
                         }
                     }
-                    
+
                     return { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } }
                 }))
-                
+
                 // Now position child nodes properly inside their containers
                 setTimeout(() => {
                     setNodes((nds) => nds.map((n) => {
                         const parentId = (n.data as any)?.parentId as string | null | undefined
                         if (!parentId || !nextExpanded.has(parentId)) return n
-                        
+
                         // Find the parent node to get container info
                         const parent = nds.find((p) => p.id === parentId)
                         if (!parent) return n
-                        
+
                         const children = nds.filter((child) => (child.data as any)?.parentId === parentId)
                         const sizes = children.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
                         const childIdSet = new Set(children.map((n) => n.id))
                         const internalEdges = rf.getEdges().filter((e) => childIdSet.has(e.source) && childIdSet.has(e.target))
-                        
+
                         const innerPadX = 16, innerPadY = 12, headerH = 22
                         const rowGapInside = layoutConfig.rowPadding
                         const innerColGap = layoutConfig.colGap
                         const contW = (parent.data as any)?.containerW || estimateNodeWidth(parent)
-                        
+
                         let pos = { x: 0, y: 0 }
                         let wrapW = Math.max(64, contW - innerPadX * 2)
-                        
+
                         if (internalEdges.length > 0) {
                             // Hierarchical positioning
                             const levelsKids = computeLevels(children, internalEdges)
@@ -1006,13 +1006,13 @@ function WorkflowInner() {
                             const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
                             const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
                             const innerH = Math.max(0, ...colH)
-                            
+
                             const availableInnerW = Math.max(0, (contW - innerPadX * 2))
                             const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
                             const colX: number[] = []
                             let runX = leftPad
                             for (let i = 0; i < columnsKids.length; i++) { colX[i] = runX; runX += colW[i] + innerColGap }
-                            
+
                             // Find this node's position
                             for (let i = 0; i < columnsKids.length; i++) {
                                 const arr = columnsKids[i]
@@ -1043,7 +1043,7 @@ function WorkflowInner() {
                             const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
                             pos = { x: cx, y: cy }
                         }
-                        
+
                         return {
                             ...n,
                             position: pos,
@@ -1052,7 +1052,7 @@ function WorkflowInner() {
                             data: { ...(n.data as any), wrapW },
                         }
                     }))
-                    
+
                     // Finally animate to layout
                     setTimeout(() => {
                         const visible = computeVisibleNodeIds(rf.getNodes(), nextExpanded)
@@ -1908,21 +1908,21 @@ function WorkflowInner() {
         const parentInState = nodes.find((n) => n.id === nodeId)
         if (!parentInState) return
         const alreadyHasChildren = nodes.some((n) => (n.data as any)?.parentId === nodeId)
-        
+
         // If children are already loaded, just perform container layout without fetching
         if (alreadyHasChildren) {
             // Use the same approach as expandAll for consistent results
             setTimeout(() => {
                 const currentNodes = rf.getNodes()
                 const currentEdges = rf.getEdges()
-                
+
                 // Set up container sizing for this specific node
                 setNodes((nds) => nds.map((n) => {
                     if (n.id !== nodeId) return n
-                    
+
                     const children = nds.filter((child) => (child.data as any)?.parentId === nodeId)
                     if (children.length === 0) return n
-                    
+
                     // Compute container sizing for this parent
                     const innerPadX = 16, innerPadY = 12, headerH = 22
                     const rowGapInside = layoutConfig.rowPadding
@@ -1953,33 +1953,33 @@ function WorkflowInner() {
                         contW = Math.max(contW, maxChildW + innerPadX * 2)
                         contH = Math.max(contH, headerH + layoutConfig.rowPadding + childrenTotalH + innerPadY)
                     }
-                    
+
                     return { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } }
                 }))
-                
+
                 // Now position child nodes properly inside their containers (same as expandAll)
                 setTimeout(() => {
                     setNodes((nds) => nds.map((n) => {
                         const parentId = (n.data as any)?.parentId as string | null | undefined
                         if (parentId !== nodeId) return n
-                        
+
                         // Find the parent node to get container info
                         const parent = nds.find((p) => p.id === parentId)
                         if (!parent) return n
-                        
+
                         const children = nds.filter((child) => (child.data as any)?.parentId === parentId)
                         const sizes = children.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
                         const childIdSet = new Set(children.map((n) => n.id))
                         const internalEdges = rf.getEdges().filter((e) => childIdSet.has(e.source) && childIdSet.has(e.target))
-                        
+
                         const innerPadX = 16, innerPadY = 12, headerH = 22
                         const rowGapInside = layoutConfig.rowPadding
                         const innerColGap = layoutConfig.colGap
                         const contW = (parent.data as any)?.containerW || estimateNodeWidth(parent)
-                        
+
                         let pos = { x: 0, y: 0 }
                         let wrapW = Math.max(64, contW - innerPadX * 2)
-                        
+
                         if (internalEdges.length > 0) {
                             // Hierarchical positioning
                             const levelsKids = computeLevels(children, internalEdges)
@@ -1990,13 +1990,13 @@ function WorkflowInner() {
                             const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
                             const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
                             const innerH = Math.max(0, ...colH)
-                            
+
                             const availableInnerW = Math.max(0, (contW - innerPadX * 2))
                             const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
                             const colX: number[] = []
                             let runX = leftPad
                             for (let i = 0; i < columnsKids.length; i++) { colX[i] = runX; runX += colW[i] + innerColGap }
-                            
+
                             // Find this node's position
                             for (let i = 0; i < columnsKids.length; i++) {
                                 const arr = columnsKids[i]
@@ -2027,7 +2027,7 @@ function WorkflowInner() {
                             const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
                             pos = { x: cx, y: cy }
                         }
-                        
+
                         return {
                             ...n,
                             position: pos,
@@ -2036,7 +2036,7 @@ function WorkflowInner() {
                             data: { ...(n.data as any), wrapW },
                         }
                     }))
-                    
+
                     // Finally animate to layout (same as expandAll)
                     setTimeout(() => {
                         const visible = computeVisibleNodeIds(rf.getNodes(), nextExpanded)
