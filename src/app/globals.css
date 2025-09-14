@@ -42,8 +42,16 @@ body {
 }
 
 /* Ensure React Flow edge labels have no background box */
-.react-flow__edge-textbg { display: none !important; fill: transparent !important; stroke: transparent !important; }
-.react-flow__edge-label { background: transparent !important; box-shadow: none !important; }
+.react-flow__edge-textbg {
+  display: none !important;
+  fill: transparent !important;
+  stroke: transparent !important;
+}
+
+.react-flow__edge-label {
+  background: transparent !important;
+  box-shadow: none !important;
+}
 
 /* Custom slider styles for physics controls */
 .slider::-webkit-slider-thumb {

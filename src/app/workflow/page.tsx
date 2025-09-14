@@ -35,7 +35,17 @@ type LayoutCfg = {
 }
 
 // Custom node with side handles (left target, right source) and inline edit on double click
-function SideNode(props: NodeProps<{ label?: string }>) {
+function SideNode(
+    props: NodeProps<{
+        label?: string
+        containerW?: number
+        containerH?: number
+        hasChildren?: boolean
+        expanded?: boolean
+        onToggleExpand?: () => void
+    }>
+)
+{
     const { id, data, selected } = props
     const [isEditing, setIsEditing] = useState(false)
     const [value, setValue] = useState<string>(data?.label ?? 'Step')
@@ -45,7 +55,7 @@ function SideNode(props: NodeProps<{ label?: string }>) {
     const measureTextWidth = useCallback((text: string) => {
         // approximate measurement using canvas 2D context to match text-sm
         const canvas = (measureTextWidth as any)._c || document.createElement('canvas')
-        ;(measureTextWidth as any)._c = canvas
+            ; (measureTextWidth as any)._c = canvas
         const ctx = canvas.getContext('2d')
         if (!ctx) return Math.max(128, text.length * 8)
         // Tailwind text-sm ~ 0.875rem (~14px). Use a common sans-serif stack
@@ -100,61 +110,84 @@ function SideNode(props: NodeProps<{ label?: string }>) {
         return () => window.removeEventListener('startNodeEdit', handler as any)
     }, [id, startEdit])
 
+    const contW = (data as any)?.containerW as number | undefined
+    const contH = (data as any)?.containerH as number | undefined
+    const headerH = 28
+
     return (
         <div
             onDoubleClick={requestEdit}
             className={
-                'rounded-md border bg-white text-gray-900 px-3 py-2 shadow-sm min-w-32 ' +
+                'relative rounded-md border ' +
+                ((data as any)?.expanded ? 'bg-transparent' : 'bg-white') +
+                ' text-gray-900 shadow-sm min-w-32 ' +
                 (selected ? 'border-blue-400' : 'border-gray-300')
             }
+            style={{
+                // Only apply explicit sizing when expanded so the node acts as a container immediately
+                width: (data as any)?.expanded && contW ? contW : undefined,
+                height: (data as any)?.expanded && contH ? contH : undefined,
+            }}
         >
             <Handle type="target" position={Position.Left} className="!w-2 !h-2 !bg-slate-400" />
-            {isEditing ? (
-                <textarea
-                    ref={taRef}
-                    className="text-sm bg-white text-gray-900 outline-none border border-gray-300 rounded px-1 py-1 resize-none"
-                    autoFocus
-                    rows={1}
-                    value={value}
-                    onChange={(e) => {
-                        setValue(e.target.value)
-                        const el = taRef.current
-                        if (el) {
-                            el.style.height = 'auto'
-                            el.style.height = `${el.scrollHeight}px`
-                        }
-                        setEditWidth(measureTextWidth(e.target.value))
-                    }}
-                    onFocus={() => {
-                        const el = taRef.current
-                        if (el) {
-                            el.style.height = 'auto'
-                            el.style.height = `${el.scrollHeight}px`
-                        }
-                        setEditWidth(measureTextWidth(value))
-                    }}
-                    onBlur={() => commit(value)}
-                    onKeyDown={(e) => {
-                        // Enter inserts newline by default; Ctrl/Cmd+Enter commits
-                        if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
-                            e.preventDefault()
-                            commit(value)
-                        }
-                        if (e.key === 'Escape') {
-                            e.preventDefault()
-                            cancel()
-                        }
-                    }}
-                    style={{ width: `${editWidth}px` }}
-                />
-            ) : (
-                <div
-                    className="text-sm whitespace-pre-wrap leading-snug cursor-pointer"
-                    onDoubleClick={requestEdit}
-                >
-                    {data?.label ?? 'Step'}
-                </div>
-            )}
+            {/* expand/collapse removed */}
+            {/* Header/title */}
+            <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3" style={{ paddingTop: 8, paddingBottom: 8 }}>
+                {isEditing ? (
+                    <textarea
+                        ref={taRef}
+                        className="text-sm bg-white text-gray-900 outline-none border border-gray-300 rounded px-1 py-1 resize-none"
+                        autoFocus
+                        rows={1}
+                        value={value}
+                        onChange={(e) => {
+                            setValue(e.target.value)
+                            const el = taRef.current
+                            if (el) {
+                                el.style.height = 'auto'
+                                el.style.height = `${el.scrollHeight}px`
+                            }
+                            setEditWidth(measureTextWidth(e.target.value))
+                        }}
+                        onFocus={() => {
+                            const el = taRef.current
+                            if (el) {
+                                el.style.height = 'auto'
+                                el.style.height = `${el.scrollHeight}px`
+                            }
+                            setEditWidth(measureTextWidth(value))
+                        }}
+                        onBlur={() => commit(value)}
+                        onKeyDown={(e) => {
+                            if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+                                e.preventDefault()
+                                commit(value)
+                            }
+                            if (e.key === 'Escape') {
+                                e.preventDefault()
+                                cancel()
+                            }
+                        }}
+                        style={{ width: `${editWidth}px` }}
+                    />
+                ) : (
+                    <div className="text-sm whitespace-pre-wrap leading-snug cursor-pointer" onDoubleClick={requestEdit}>
+                        {data?.label ?? 'Step'}
+                    </div>
+                )}
+        {/* Expand button only for nodes with children */}
+        {(data as any)?.hasChildren ? (
+                    <button
+                        type="button"
+                        className="ml-2 text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+            title={(data as any)?.expanded ? 'Collapse' : 'Expand'}
+            onClick={(e) => { e.stopPropagation(); (data as any)?.onToggleExpand?.() }}
+                    >
+            {(data as any)?.expanded ? '▾' : '▸'}
+                    </button>
+                ) : null}
+            </div>
+            {/* Body area is implicit; children are absolutely positioned within this parent when expanded. */}
             <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-sky-400" />
         </div>
     )
@@ -168,7 +201,12 @@ function computeLevels(nodes: Node[], edges: Edge[]) {
     // Nodes with no incoming edges are sources; assign level 0, then BFS forward
     const incomingCount = new Map<string, number>()
     nodes.forEach((n) => incomingCount.set(n.id, 0))
-    edges.forEach((e) => incomingCount.set(e.target, (incomingCount.get(e.target) || 0) + 1))
+    const nodeSet = new Set(nodes.map((n) => n.id))
+    edges.forEach((e) => {
+        if (nodeSet.has(e.source) && nodeSet.has(e.target)) {
+            incomingCount.set(e.target, (incomingCount.get(e.target) || 0) + 1)
+        }
+    })
     const queue: string[] = []
     const level: Record<string, number> = {}
     nodes.forEach((n) => {
@@ -186,7 +224,7 @@ function computeLevels(nodes: Node[], edges: Edge[]) {
         const u = queue.shift()!
         const next = (level[u] || 0) + 1
         edges
-            .filter((e) => e.source === u)
+            .filter((e) => e.source === u && nodeSet.has(e.target))
             .forEach((e) => {
                 if (!(e.target in level)) {
                     level[e.target] = next
@@ -201,9 +239,12 @@ function orderWithinLevels(levels: Record<string, number>, nodes: Node[], edges:
     // Build children map by following edges that increase level by 1
     const childrenMap = new Map<string, string[]>()
     nodes.forEach((n) => childrenMap.set(n.id, []))
+    const nodeSet = new Set(nodes.map((n) => n.id))
     edges.forEach((e) => {
+        if (!nodeSet.has(e.source) || !nodeSet.has(e.target)) return
         if ((levels[e.source] ?? 0) + 1 === (levels[e.target] ?? 0)) {
-            childrenMap.get(e.source)!.push(e.target)
+            const arr = childrenMap.get(e.source)
+            if (arr) arr.push(e.target)
         }
     })
 
@@ -244,7 +285,9 @@ function orderWithinLevels(levels: Record<string, number>, nodes: Node[], edges:
 // Estimate node width if measured width isn't available yet
 function estimateNodeWidth(n: Node) {
     const measured = (n as any).width as number | undefined
-    if (measured && measured > 0) return measured
+    const containerW = (n.data as any)?.containerW as number | undefined
+    if (measured && measured > 0) return containerW && containerW > measured ? containerW : measured
+    if (containerW && containerW > 0) return containerW
     const label = ((n.data as any)?.label as string) ?? ''
     const longestLine = label.split('\n').reduce((m, s) => Math.max(m, s.length), 0)
     const charW = 7.5 // approx for text-sm
@@ -255,7 +298,9 @@ function estimateNodeWidth(n: Node) {
 
 function estimateNodeHeight(n: Node) {
     const measured = (n as any).height as number | undefined
-    if (measured && measured > 0) return measured
+    const containerH = (n.data as any)?.containerH as number | undefined
+    if (measured && measured > 0) return containerH && containerH > measured ? containerH : measured
+    if (containerH && containerH > 0) return containerH
     const label = ((n.data as any)?.label as string) ?? ''
     const lines = Math.max(1, label.split('\n').length)
     const lineH = 18 // ~1.125rem line-height for text-sm
@@ -264,51 +309,164 @@ function estimateNodeHeight(n: Node) {
     return Math.max(minH, lines * lineH + paddingY)
 }
 
-function layout(nodesIn: Node[], edges: Edge[], cfg: LayoutCfg = { baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 }) {
-    const levels = computeLevels(nodesIn, edges)
-    const byLevel = orderWithinLevels(levels, nodesIn, edges)
+function layout(
+    nodesIn: Node[],
+    edges: Edge[],
+    cfg: LayoutCfg = { baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 },
+    expanded: Set<string> = new Set()
+) {
+    // Use only edges whose endpoints exist in nodesIn to avoid referencing hidden nodes
+    const nodeSet = new Set(nodesIn.map((n) => n.id))
+    const safeEdges = edges.filter((e) => nodeSet.has(e.source) && nodeSet.has(e.target))
+    const levels = computeLevels(nodesIn, safeEdges)
+    const byLevel = orderWithinLevels(levels, nodesIn, safeEdges)
     const sortedLevels = Array.from(byLevel.keys()).sort((a, b) => a - b)
 
-    // Determine max width per column
-    const colMaxWidth: Record<number, number> = {}
-    sortedLevels.forEach((L) => {
-        const arr = byLevel.get(L) || []
-        colMaxWidth[L] = Math.max(1, ...arr.map((n) => estimateNodeWidth(n)))
-    })
-
-    // Compute x positions cumulatively using each column's max width
-    const colX: Record<number, number> = {}
-    let runningX = cfg.baseX
-    sortedLevels.forEach((L, idx) => {
-        if (idx === 0) {
-            colX[L] = runningX
-        } else {
-            const prevL = sortedLevels[idx - 1]
-            runningX = (colX[prevL] || cfg.baseX) + (colMaxWidth[prevL] || 0) + cfg.colGap
-            colX[L] = runningX
+    // Build children mapping using nodes' data.parentId (DB parent_step_id)
+    const childrenByParent = new Map<string, Node[]>()
+    nodesIn.forEach((n) => childrenByParent.set(n.id, []))
+    nodesIn.forEach((n) => {
+        const pid = (n.data as any)?.parentId as string | null | undefined
+        if (pid && childrenByParent.has(pid)) {
+            childrenByParent.get(pid)!.push(n)
         }
     })
 
-    // For each column, stack nodes centered vertically using measured heights; center nodes within column width
+    // Pre-compute container sizes and child relative positions for expanded parents
+    type Cont = { w: number; h: number; childPos: Map<string, { x: number; y: number }>; childIds: Set<string> }
+    const container: Map<string, Cont> = new Map()
+    const innerPadX = 16, innerPadY = 12, headerH = 28, rowGapInside = 12
+    for (const n of nodesIn) {
+        if (!expanded.has(n.id)) continue
+        const kids = childrenByParent.get(n.id) || []
+        if (!kids.length) continue
+        const sizes = kids.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
+        const maxChildW = Math.max(...sizes.map((s) => s.w))
+        const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
+        const contW = Math.max(estimateNodeWidth(n), maxChildW + innerPadX * 2)
+        const contH = Math.max(estimateNodeHeight(n), headerH + innerPadY + childrenTotalH + innerPadY)
+        const childPos = new Map<string, { x: number; y: number }>()
+        let cy = headerH + innerPadY
+        for (const s of sizes) {
+            const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
+            childPos.set(s.id, { x: cx, y: cy })
+            cy += s.h + rowGapInside
+        }
+        container.set(n.id, { w: contW, h: contH, childPos, childIds: new Set(kids.map((k) => k.id)) })
+    }
+
+    // Build columns from level ordering, then remove any contained children of expanded parents from whatever column they appear in
+    const columns: Node[][] = Array.from(byLevel.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([, arr]) => [...arr])
+    if (expanded.size) {
+        const childrenIds = new Set<string>()
+        nodesIn.forEach((n) => {
+            if (!expanded.has(n.id)) return
+            const kids = childrenByParent.get(n.id) || []
+            kids.forEach((k) => childrenIds.add(k.id))
+        })
+        if (childrenIds.size) {
+            for (let i = 0; i < columns.length; i++) {
+                columns[i] = columns[i].filter((n) => !childrenIds.has(n.id))
+            }
+        }
+    }
+
+    // Determine max width per produced column
+    const colMaxWidth: number[] = columns.map((arr) => Math.max(1, ...arr.map((n) => {
+        const cont = container.get(n.id)
+        return cont ? Math.max(estimateNodeWidth(n), cont.w) : estimateNodeWidth(n)
+    })))
+    // Compute x positions cumulatively
+    const colX: number[] = []
+    let runningX = cfg.baseX
+    for (let i = 0; i < columns.length; i++) {
+        colX[i] = runningX
+        runningX = runningX + (colMaxWidth[i] || 0) + cfg.colGap
+    }
+
+    // For each column, stack nodes centered vertically; center nodes within column width
     const positioned = nodesIn.map((n) => ({ ...n }))
     const nodeIndex = new Map<string, number>()
-    sortedLevels.forEach((L) => {
-        const arr = byLevel.get(L) || []
+    columns.forEach((arr, colIdx) => {
         const heights = arr.map((n) => estimateNodeHeight(n))
         const totalHeight = heights.reduce((a, b) => a + b, 0) + Math.max(0, arr.length - 1) * cfg.rowPadding
         let cursorY = cfg.baseY - totalHeight / 2
-        const colW = colMaxWidth[L] || 0
+        const colW = colMaxWidth[colIdx] || 0
         arr.forEach((n, i) => {
             nodeIndex.set(n.id, i)
-            const estimatedW = estimateNodeWidth(n)
-            const left = (colX[L] || cfg.baseX) + Math.max(0, (colW - estimatedW) / 2)
+            const cont = container.get(n.id)
+            const estimatedW = cont ? Math.max(estimateNodeWidth(n), cont.w) : estimateNodeWidth(n)
+            const left = (colX[colIdx] || cfg.baseX) + Math.max(0, (colW - estimatedW) / 2)
             const y = cursorY
-            cursorY += heights[i] + cfg.rowPadding
+            const h = cont ? Math.max(estimateNodeHeight(n), cont.h) : heights[i]
+            cursorY += h + cfg.rowPadding
             const idx = positioned.findIndex((p) => p.id === n.id)
-            if (idx >= 0) positioned[idx] = { ...positioned[idx], position: { x: left, y } }
+            if (idx >= 0) {
+                // apply container sizes when expanded
+                const data = cont ? { ...(positioned[idx].data as any), containerW: cont.w, containerH: cont.h } : positioned[idx].data
+                positioned[idx] = { ...positioned[idx], position: { x: left, y }, data }
+                // If this node is a container, assign child relative positions and parentNode to children
+                if (cont) {
+                    cont.childPos.forEach((pos, childId) => {
+                        const cidx = positioned.findIndex((p) => p.id === childId)
+                        if (cidx >= 0) positioned[cidx] = { ...positioned[cidx], position: { x: pos.x, y: pos.y }, parentNode: n.id, extent: 'parent' as any }
+                    })
+                }
+            }
         })
     })
+    // Clear parentNode for nodes that are not inside any container
+    const allContained = new Set<string>()
+    container.forEach((c) => c.childIds.forEach((id) => allContained.add(id)))
+    for (let i = 0; i < positioned.length; i++) {
+        const p = positioned[i]
+        if (!allContained.has(p.id) && (p as any).parentNode) {
+            const { parentNode, extent, ...rest } = p as any
+            positioned[i] = rest
+        }
+    }
     return { nodes: positioned, levels, nodeIndex }
+}
+
+// Compute which nodes are visible based on expand/collapse state.
+// Rule: roots (no parents) are always visible; a node becomes visible if it is reachable from a visible node
+// through a chain of edges where each source node along the path is expanded. This supports multi-parents:
+// a node is visible if there exists at least one expanded path to it.
+function computeVisibleNodeIds(nodes: Node[], expanded: Set<string>): Set<string> {
+    // Build parent/children maps from nodes' data.parentId (process_step.parent_step_id)
+    const parentByChild = new Map<string, string | null>()
+    const childrenByParent = new Map<string, string[]>()
+    nodes.forEach((n) => {
+        const pid = (n.data as any)?.parentId as string | null | undefined
+        parentByChild.set(n.id, pid ?? null)
+        if (!childrenByParent.has(n.id)) childrenByParent.set(n.id, [])
+    })
+    nodes.forEach((n) => {
+        const pid = (n.data as any)?.parentId as string | null | undefined
+        if (pid) {
+            if (!childrenByParent.has(pid)) childrenByParent.set(pid, [])
+            childrenByParent.get(pid)!.push(n.id)
+        }
+    })
+
+    const roots = nodes.filter((n) => !parentByChild.get(n.id)).map((n) => n.id)
+    const visible = new Set<string>(roots)
+    const q: string[] = [...roots]
+    while (q.length) {
+        const p = q.shift()!
+        const kids = childrenByParent.get(p) || []
+        // Only propagate visibility through expanded parents
+        if (!expanded.has(p)) continue
+        for (const c of kids) {
+            if (!visible.has(c)) {
+                visible.add(c)
+                q.push(c)
+            }
+        }
+    }
+    return visible
 }
 
 function WorkflowInner() {
@@ -329,6 +487,8 @@ function WorkflowInner() {
     const [layoutConfig, setLayoutConfig] = useState<LayoutCfg>({ baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 })
     const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
     const [menuTarget, setMenuTarget] = useState<{ kind: 'node' | 'edge'; id: string } | null>(null)
+    // Track expanded container nodes
+    const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set())
     const [configOpen, setConfigOpen] = useState(false)
     // Re-enable auto-layout; it will pause while editing
     const AUTO_LAYOUT = true
@@ -344,8 +504,8 @@ function WorkflowInner() {
     const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s)
 
     // Snapshot of last loaded/saved state to compute diffs
-    const snapshotRef = useRef<{ nodeName: Record<string, string>; edgeLabel: Record<string, string> }>(
-        { nodeName: {}, edgeLabel: {} }
+    const snapshotRef = useRef<{ nodeName: Record<string, string>; nodeParentId: Record<string, string | null>; edgeLabel: Record<string, string> }>(
+        { nodeName: {}, nodeParentId: {}, edgeLabel: {} }
     )
     // Track deletions to persist
     const deletedNodeIdsRef = useRef<Set<string>>(new Set())
@@ -360,6 +520,7 @@ function WorkflowInner() {
                 .from('process_step')
                 .select('id, name, description, metadata, parent_step_id')
                 .eq('organisation_id', selectedOrgId)
+                .is('parent_step_id', null)
             if (sErr) throw sErr
             const { data: flows, error: fErr } = await supabase
                 .from('process_flow_edge')
@@ -369,27 +530,51 @@ function WorkflowInner() {
 
             const rfNodes: Node[] = (steps || []).map((s: any) => ({
                 id: String(s.id),
-                data: { label: s.name || 'Step' },
+                data: { label: s.name || 'Step', parentId: s.parent_step_id ? String(s.parent_step_id) : null },
                 position: { x: 0, y: 0 },
                 type: 'side',
             }))
-            const rfEdges: Edge[] = (flows || []).map((e: any) => ({
+            // Determine which fetched nodes have children
+            const rootIds = rfNodes.map((n) => n.id)
+            if (rootIds.length) {
+                const { data: childRows, error: cErr } = await supabase
+                    .from('process_step')
+                    .select('parent_step_id')
+                    .eq('organisation_id', selectedOrgId)
+                    .in('parent_step_id', rootIds)
+                if (cErr) throw cErr
+                const hasChildSet = new Set<string>((childRows || []).map((r: any) => String(r.parent_step_id)))
+                rfNodes.forEach((n) => {
+                    (n.data as any).hasChildren = hasChildSet.has(n.id)
+                })
+            }
+            const rfEdgesAll: Edge[] = (flows || []).map((e: any) => ({
                 id: String(e.id),
                 source: String(e.from_step_id),
                 target: String(e.to_step_id),
                 type: 'editableLabel',
                 data: { label: e.label || '' },
             }))
-
-            const { nodes: laid } = layout(rfNodes, rfEdges, layoutConfig)
-            setNodes(laid)
-            setEdges(rfEdges)
+            // Only keep edges whose endpoints are present in the fetched nodes
+            const nodeIdSet = new Set(rfNodes.map((n) => n.id))
+            const rfEdges: Edge[] = rfEdgesAll.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
+            // Layout all nodes and show all edges (no parents expanded initially)
+            const { nodes: laid } = layout(rfNodes, rfEdges, layoutConfig, expandedNodeIds)
+            const laidMap = new Map(laid.map((n) => [n.id, n]))
+            const nextNodes = rfNodes.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false }))
+            const nextEdges = rfEdges.map((e) => ({ ...e, hidden: false }))
+            setNodes(nextNodes)
+            setEdges(nextEdges)
             // refresh snapshot
             const nodeName: Record<string, string> = {}
-            laid.forEach((n) => (nodeName[n.id] = (n.data as any)?.label ?? ''))
+            const nodeParentId: Record<string, string | null> = {}
+            nextNodes.forEach((n) => {
+                nodeName[n.id] = (n.data as any)?.label ?? ''
+                nodeParentId[n.id] = ((n.data as any)?.parentId as string | null | undefined) ?? null
+            })
             const edgeLabel: Record<string, string> = {}
-            rfEdges.forEach((e) => (edgeLabel[e.id] = ((e as any).data?.label as string) ?? ''))
-            snapshotRef.current = { nodeName, edgeLabel }
+            nextEdges.forEach((e) => (edgeLabel[e.id] = ((e as any).data?.label as string) ?? ''))
+            snapshotRef.current = { nodeName, nodeParentId, edgeLabel }
         } catch (err: any) {
             setError(err?.message || 'Failed to load processes')
             setNodes([])
@@ -397,7 +582,7 @@ function WorkflowInner() {
         } finally {
             setLoading(false)
         }
-    }, [selectedOrgId, setNodes, setEdges])
+    }, [selectedOrgId, setNodes, setEdges, layoutConfig, expandedNodeIds])
 
     useEffect(() => {
         void load()
@@ -418,25 +603,30 @@ function WorkflowInner() {
         // compute layout only when structure changes AND nothing is being edited
         if (!AUTO_LAYOUT) return
         if (editingNodeId || isEditingEdge) return // skip layout while editing
-        const { nodes: laid } = layout(nodes, edges, layoutConfig)
-        setNodes(laid)
-        // do not setEdges here to avoid changing edge objects needlessly
-    }, [structureKey, editingNodeId, isEditingEdge, layoutConfig])
+    const { nodes: laid } = layout(nodes, edges, layoutConfig, expandedNodeIds)
+        const laidMap = new Map(laid.map((n) => [n.id, n]))
+        setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: false })))
+    }, [structureKey, editingNodeId, isEditingEdge, layoutConfig, expandedNodeIds])
 
     useEffect(() => {
         // Re-run layout once widths are known
         if (!AUTO_LAYOUT) return
         if (editingNodeId || isEditingEdge) return
-        const { nodes: laid } = layout(nodes, edges, layoutConfig)
-        setNodes(laid)
-    }, [widthKey, editingNodeId, isEditingEdge, layoutConfig])
+    const { nodes: laid } = layout(nodes, edges, layoutConfig, expandedNodeIds)
+        const laidMap = new Map(laid.map((n) => [n.id, n]))
+        setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: false })))
+    }, [widthKey, editingNodeId, isEditingEdge, layoutConfig, expandedNodeIds])
 
     useEffect(() => {
         if (!AUTO_LAYOUT) return
         if (editingNodeId || isEditingEdge) return
-        const { nodes: laid } = layout(nodes, edges, layoutConfig)
-        setNodes(laid)
-    }, [heightKey, editingNodeId, isEditingEdge, layoutConfig])
+    const { nodes: laid } = layout(nodes, edges, layoutConfig, expandedNodeIds)
+        const laidMap = new Map(laid.map((n) => [n.id, n]))
+        setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: false })))
+    }, [heightKey, editingNodeId, isEditingEdge, layoutConfig, expandedNodeIds])
 
     // Listen for inline node label update events from custom nodes
     useEffect(() => {
@@ -446,13 +636,13 @@ function WorkflowInner() {
             setNodes((nds) => nds.map((n) => (n.id === detail.nodeId ? { ...n, data: { ...(n.data as any), label: detail.newLabel } } : n)))
             setEditingNodeId(null) // clear editing state when update completes
         }
-        
+
         const handleStartEdit = (e: Event) => {
             const detail = (e as CustomEvent).detail as { nodeId: string }
             if (!detail?.nodeId) return
             setEditingNodeId(detail.nodeId) // track which node is being edited
         }
-        
+
         window.addEventListener('updateNodeLabel', handleUpdate as any)
         window.addEventListener('startNodeEdit', handleStartEdit as any)
         return () => {
@@ -487,35 +677,35 @@ function WorkflowInner() {
         return edges.map((e) => ({
             ...e,
             type: 'editableLabel',
-        data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu },
+            data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu },
         })) as Edge[]
     }, [edges, onEdgeLabelCommit, onEdgeEditingChange, onOpenEdgeMenu])
 
-        // Handle delete key for selected nodes/edges
-        useEffect(() => {
-            const onKey = (e: KeyboardEvent) => {
-                if (e.key !== 'Delete' && e.key !== 'Backspace') return
-                const toDeleteNodes = nodes.filter((n) => n.selected).map((n) => n.id)
-                const toDeleteEdges = edges.filter((ed) => ed.selected).map((ed) => ed.id)
-                if (toDeleteNodes.length === 0 && toDeleteEdges.length === 0) return
-                // Remove selected edges first
-                if (toDeleteEdges.length) {
-                    setEdges((eds) => eds.filter((e) => !toDeleteEdges.includes(e.id)))
-                    toDeleteEdges.forEach((id) => deletedEdgeIdsRef.current.add(id))
-                }
-                // Remove selected nodes and any incident edges
-                if (toDeleteNodes.length) {
-                    // mark incident edges for deletion
-                    const incidentEdgeIds = edges.filter((e) => toDeleteNodes.includes(e.source) || toDeleteNodes.includes(e.target)).map((e) => e.id)
-                    incidentEdgeIds.forEach((id) => deletedEdgeIdsRef.current.add(id))
-                    setNodes((nds) => nds.filter((n) => !toDeleteNodes.includes(n.id)))
-                    setEdges((eds) => eds.filter((e) => !toDeleteNodes.includes(e.source) && !toDeleteNodes.includes(e.target)))
-                    toDeleteNodes.forEach((id) => deletedNodeIdsRef.current.add(id))
-                }
+    // Handle delete key for selected nodes/edges
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (e.key !== 'Delete' && e.key !== 'Backspace') return
+            const toDeleteNodes = nodes.filter((n) => n.selected).map((n) => n.id)
+            const toDeleteEdges = edges.filter((ed) => ed.selected).map((ed) => ed.id)
+            if (toDeleteNodes.length === 0 && toDeleteEdges.length === 0) return
+            // Remove selected edges first
+            if (toDeleteEdges.length) {
+                setEdges((eds) => eds.filter((e) => !toDeleteEdges.includes(e.id)))
+                toDeleteEdges.forEach((id) => deletedEdgeIdsRef.current.add(id))
             }
-            window.addEventListener('keydown', onKey)
-            return () => window.removeEventListener('keydown', onKey)
-        }, [nodes, edges, setNodes, setEdges])
+            // Remove selected nodes and any incident edges
+            if (toDeleteNodes.length) {
+                // mark incident edges for deletion
+                const incidentEdgeIds = edges.filter((e) => toDeleteNodes.includes(e.source) || toDeleteNodes.includes(e.target)).map((e) => e.id)
+                incidentEdgeIds.forEach((id) => deletedEdgeIdsRef.current.add(id))
+                setNodes((nds) => nds.filter((n) => !toDeleteNodes.includes(n.id)))
+                setEdges((eds) => eds.filter((e) => !toDeleteNodes.includes(e.source) && !toDeleteNodes.includes(e.target)))
+                toDeleteNodes.forEach((id) => deletedNodeIdsRef.current.add(id))
+            }
+        }
+        window.addEventListener('keydown', onKey)
+        return () => window.removeEventListener('keydown', onKey)
+    }, [nodes, edges, setNodes, setEdges])
 
     // Start connecting from a source handle (right handle)
     const onConnectStart = useCallback<OnConnectStart>((event, params) => {
@@ -582,6 +772,8 @@ function WorkflowInner() {
         [connectingFromId, didConnect, rf, setNodes, setEdges]
     )
 
+    // removed addChild function per request
+
     // Node context menu handler
     const onNodeContextMenu = useCallback((event: any, node: Node) => {
         event?.preventDefault?.()
@@ -605,10 +797,10 @@ function WorkflowInner() {
         if (menuTarget.kind === 'node') {
             const id = menuTarget.id
             setNodes((nds) => nds.map((n) => ({ ...n, selected: n.id === id })))
-        // mark incident edges for deletion and remove
-        const incidentEdgeIds = edges.filter((e) => e.source === id || e.target === id).map((e) => e.id)
-        incidentEdgeIds.forEach((eid) => deletedEdgeIdsRef.current.add(eid))
-        setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
+            // mark incident edges for deletion and remove
+            const incidentEdgeIds = edges.filter((e) => e.source === id || e.target === id).map((e) => e.id)
+            incidentEdgeIds.forEach((eid) => deletedEdgeIdsRef.current.add(eid))
+            setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
             deletedNodeIdsRef.current.add(id)
             setNodes((nds) => nds.filter((n) => n.id !== id))
         } else {
@@ -690,19 +882,25 @@ function WorkflowInner() {
                     const ids = Array.from(deletedNodeIdsRef.current)
                     const { error: delN } = await supabase.from('process_step').delete().in('id', ids)
                     if (delN) throw delN
-                    ids.forEach((id) => delete snap.nodeName[id])
+                    ids.forEach((id) => { delete snap.nodeName[id]; delete snap.nodeParentId[id] })
                     deletedNodeIdsRef.current.clear()
                 }
             }
 
-                        // New/updated nodes
-            const nodeRows: { id: string; organisation_id: string; name: string }[] = nodes.map((n: any) => ({
+            // New/updated nodes
+            const nodeRows: { id: string; organisation_id: string; name: string; parent_step_id: string | null }[] = nodes.map((n: any) => ({
                 id: n.id,
                 organisation_id: selectedOrgId,
                 name: (n.data?.label as string) ?? '',
+                parent_step_id: (n.data?.parentId as string | null | undefined) ?? null,
             }))
             const newNodes = nodeRows.filter((r) => snap.nodeName[r.id] === undefined)
-            const changedNodes = nodeRows.filter((r) => snap.nodeName[r.id] !== undefined && snap.nodeName[r.id] !== r.name)
+            const changedNodes = nodeRows.filter((r) => {
+                if (snap.nodeName[r.id] === undefined) return false
+                const nameChanged = snap.nodeName[r.id] !== r.name
+                const parentChanged = (snap.nodeParentId[r.id] ?? null) !== (r.parent_step_id ?? null)
+                return nameChanged || parentChanged
+            })
 
             if (newNodes.length || changedNodes.length) {
                 const upsertNodes = [...newNodes, ...changedNodes]
@@ -711,13 +909,13 @@ function WorkflowInner() {
             }
 
             // New/updated edges
-        const edgeRows: { id: string; organisation_id: string; from_step_id: string; to_step_id: string; label: string }[] = edges.map(
+            const edgeRows: { id: string; organisation_id: string; from_step_id: string; to_step_id: string; label: string }[] = edges.map(
                 (e: any) => ({
                     id: e.id,
                     organisation_id: selectedOrgId,
                     from_step_id: e.source,
                     to_step_id: e.target,
-            label: (e.data?.label as string) ?? (e.label as string) ?? '',
+                    label: (e.data?.label as string) ?? (e.label as string) ?? '',
                 })
             )
             const newEdges = edgeRows.filter((r) => snap.edgeLabel[r.id] === undefined)
@@ -731,10 +929,14 @@ function WorkflowInner() {
 
             // Update snapshot to current state
             const nodeName: Record<string, string> = {}
-            nodes.forEach((n: any) => (nodeName[n.id] = (n.data?.label as string) ?? ''))
+            const nodeParentId: Record<string, string | null> = {}
+            nodes.forEach((n: any) => {
+                nodeName[n.id] = (n.data?.label as string) ?? ''
+                nodeParentId[n.id] = (n.data?.parentId as string | null | undefined) ?? null
+            })
             const edgeLabel: Record<string, string> = {}
             edges.forEach((e: any) => (edgeLabel[e.id] = (e.data?.label as string) ?? (e.label as string) ?? ''))
-            snapshotRef.current = { nodeName, edgeLabel }
+            snapshotRef.current = { nodeName, nodeParentId, edgeLabel }
 
             setSaveMsg('Saved')
         } catch (err: any) {
@@ -751,6 +953,122 @@ function WorkflowInner() {
         const levels = computeLevels(nodes, edges)
         return (levels[conn.target] ?? 0) > (levels[conn.source] ?? 0)
     }, [nodes, edges])
+
+    // Toggle expand and lazy-load children for that parent
+    const toggleExpand = useCallback(async (nodeId: string) => {
+        setExpandedNodeIds((prev) => {
+            const next = new Set(prev)
+            if (next.has(nodeId)) next.delete(nodeId)
+            else next.add(nodeId)
+            return next
+        })
+
+        // If expanding and children are not in state yet, fetch direct children and any edges among them
+        const parentInState = nodes.find((n) => n.id === nodeId)
+        if (!parentInState) return
+        const alreadyHasChildren = nodes.some((n) => (n.data as any)?.parentId === nodeId)
+        if (alreadyHasChildren) return
+
+        try {
+            const { data: childSteps, error: cErr } = await supabase
+                .from('process_step')
+                .select('id, name, description, metadata, parent_step_id')
+                .eq('organisation_id', selectedOrgId as string)
+                .eq('parent_step_id', nodeId)
+            if (cErr) throw cErr
+
+            const childNodesRaw: Node[] = (childSteps || []).map((s: any) => ({
+                id: String(s.id),
+                data: { label: s.name || 'Step', parentId: s.parent_step_id ? String(s.parent_step_id) : null },
+                // positions will be set after sizing computation
+                position: { x: 0, y: 0 },
+                type: 'side',
+            }))
+
+            // Annotate each child with hasChildren flag
+            if (childNodesRaw.length) {
+                const { data: grandRows, error: gErr } = await supabase
+                    .from('process_step')
+                    .select('parent_step_id')
+                    .eq('organisation_id', selectedOrgId as string)
+                    .in('parent_step_id', childNodesRaw.map((n) => n.id))
+                if (gErr) throw gErr
+                const hasChildSet = new Set<string>((grandRows || []).map((r: any) => String(r.parent_step_id)))
+                childNodesRaw.forEach((n) => ((n.data as any).hasChildren = hasChildSet.has(n.id)))
+            }
+
+            // Compute immediate container sizing and child positions to avoid any flash outside
+            const parentNode = nodes.find((n) => n.id === nodeId)
+            const innerPadX = 16, innerPadY = 12, headerH = 28, rowGapInside = 12
+            const sizes = childNodesRaw.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
+            const maxChildW = sizes.length ? Math.max(...sizes.map((s) => s.w)) : 0
+            const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
+            const baseParentW = parentNode ? estimateNodeWidth(parentNode) : 160
+            const baseParentH = parentNode ? estimateNodeHeight(parentNode) : 48
+            const contW = Math.max(baseParentW, maxChildW + innerPadX * 2)
+            const contH = Math.max(baseParentH, headerH + innerPadY + childrenTotalH + innerPadY)
+            // Assign child relative positions inside the container now
+            let cy = headerH + innerPadY
+            const childNodes: Node[] = childNodesRaw.map((c) => {
+                const s = sizes.find((x) => x.id === c.id)!
+                const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
+                const node: Node = {
+                    ...c,
+                    position: { x: cx, y: cy },
+                    parentNode: nodeId,
+                    extent: 'parent' as any,
+                }
+                cy += s.h + rowGapInside
+                return node
+            })
+
+            // Fetch edges whose endpoints are in the union of existing nodes + new child nodes
+            const currentIds = new Set(nodes.map((n) => n.id))
+            const allIds = [...new Set([...Array.from(currentIds), ...childNodes.map((n) => n.id)])]
+            let newEdges: Edge[] = []
+            if (allIds.length) {
+                const { data: edgeRows, error: eErr } = await supabase
+                    .from('process_flow_edge')
+                    .select('id, from_step_id, to_step_id, label, metadata')
+                    .eq('organisation_id', selectedOrgId as string)
+                    .in('from_step_id', allIds)
+                    .in('to_step_id', allIds)
+                if (eErr) throw eErr
+                newEdges = (edgeRows || []).map((e: any) => ({
+                    id: String(e.id),
+                    source: String(e.from_step_id),
+                    target: String(e.to_step_id),
+                    type: 'editableLabel',
+                    data: { label: e.label || '' },
+                }))
+            }
+
+            // Merge new children and edges, avoiding duplicates; also pre-set parent container size immediately
+            setNodes((nds) => {
+                const exist = new Set(nds.map((n) => n.id))
+                const withChildren = nds.concat(childNodes.filter((n) => !exist.has(n.id)))
+                return withChildren.map((n) => (
+                    n.id === nodeId
+                        ? { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } }
+                        : n
+                ))
+            })
+            setEdges((eds) => {
+                const exist = new Set(eds.map((e) => e.id))
+                return eds.concat(newEdges.filter((e) => !exist.has(e.id)))
+            })
+        } catch (err) {
+            console.error('Expand load failed', err)
+        }
+    }, [nodes, selectedOrgId, setNodes, setEdges])
+
+    const viewNodes = useMemo(() => {
+        const expanded = expandedNodeIds
+        return nodes.map((n) => ({
+            ...n,
+            data: { ...(n.data as any), expanded: expanded.has(n.id), onToggleExpand: () => toggleExpand(n.id) },
+        }))
+    }, [nodes, expandedNodeIds, toggleExpand])
 
     return (
         <div className="h-screen w-screen bg-gray-950">
@@ -812,47 +1130,48 @@ function WorkflowInner() {
                     <div className="text-red-400 p-3">{error}</div>
                 ) : loading ? (
                     <div className="text-gray-400 p-3">Loading…</div>
-        ) : (
-            <>
-                    <ReactFlow
-                        nodes={nodes}
-                        edges={viewEdges}
-                        onNodesChange={onNodesChange}
-                        onEdgesChange={onEdgesChange}
-                        onNodeDoubleClick={onNodeDoubleClick}
-                        onNodeContextMenu={onNodeContextMenu}
-                        onConnectStart={onConnectStart}
-                        onConnectEnd={onConnectEnd}
-                        onConnect={onConnect}
-                        isValidConnection={isValidConnection}
-                        nodeTypes={nodeTypes}
-                        edgeTypes={edgeTypes}
-                                     nodesDraggable
-                                     elementsSelectable
-                                     selectionOnDrag
-                        panOnDrag={false}
-                        selectionMode={SelectionMode.Partial}
-                        multiSelectionKeyCode="Shift"
-                        fitView
-                    >
-                        <Background />
-                        <Controls />
-                    </ReactFlow>
-                    {menuPos && menuTarget && (
-                        <div
-                className="fixed z-50 bg-gray-800 text-gray-100 border border-gray-700 rounded shadow-md"
-                            style={{ left: menuPos.x, top: menuPos.y }}
-                            onClick={(e) => e.stopPropagation()}
+                ) : (
+                    <>
+                        <ReactFlow
+                            nodes={viewNodes}
+                            edges={viewEdges}
+                            onNodesChange={onNodesChange}
+                            onEdgesChange={onEdgesChange}
+                            onNodeDoubleClick={onNodeDoubleClick}
+                            onNodeContextMenu={onNodeContextMenu}
+                            onConnectStart={onConnectStart}
+                            onConnectEnd={onConnectEnd}
+                            onConnect={onConnect}
+                            isValidConnection={isValidConnection}
+                            nodeTypes={nodeTypes}
+                            edgeTypes={edgeTypes}
+                            nodesDraggable
+                            elementsSelectable
+                            selectionOnDrag
+                            panOnDrag={false}
+                            selectionMode={SelectionMode.Partial}
+                            multiSelectionKeyCode="Shift"
+                            fitView
                         >
-                            <button
-                                className="px-3 py-1.5 text-sm w-full text-left hover:bg-gray-700"
-                                onClick={deleteMenuTarget}
+                            <Background />
+                            <Controls />
+                        </ReactFlow>
+                        {menuPos && menuTarget && (
+                            <div
+                                className="fixed z-50 bg-gray-800 text-gray-100 border border-gray-700 rounded shadow-md"
+                                style={{ left: menuPos.x, top: menuPos.y }}
+                                onClick={(e) => e.stopPropagation()}
                             >
-                                Delete {menuTarget.kind === 'node' ? 'node' : 'edge'}
-                            </button>
-                        </div>
-                    )}
-            </>
+                                {/* removed Add child action */}
+                                <button
+                                    className="px-3 py-1.5 text-sm w-full text-left hover:bg-gray-700"
+                                    onClick={deleteMenuTarget}
+                                >
+                                    Delete {menuTarget.kind === 'node' ? 'node' : 'edge'}
+                                </button>
+                            </div>
+                        )}
+                    </>
                 )}
                 {saveMsg && (
                     <div className="absolute top-14 right-4 text-xs px-2 py-1 rounded bg-gray-800 text-gray-100 border border-gray-700">
