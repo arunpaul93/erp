@@ -578,7 +578,7 @@ function WorkflowInner() {
     const AUTO_LAYOUT = true
 
     // Add a new root-level node (no parent) — defined later after helpers
-    let addRootNode = (() => {}) as any
+    let addRootNode = (() => { }) as any
 
     // Restore expanded containers from localStorage (so expansions persist until collapsed)
     useEffect(() => {
@@ -783,7 +783,7 @@ function WorkflowInner() {
                     for (const id of newIds) {
                         const nodeEntry = nodeById.get(id)
                         if (!nodeEntry) continue
-                        ;(nodeEntry.data as any).hasChildren = hasChildSet.has(id)
+                            ; (nodeEntry.data as any).hasChildren = hasChildSet.has(id)
                         if (hasChildSet.has(id)) {
                             nextExpanded.add(id) // expand containers so recurse continues
                             toVisit.push(id)
