@@ -1209,8 +1209,8 @@ function WorkflowInner() {
                 const group = all.filter((n) => n.id === parentId || (n.data as any)?.parentId === parentId)
                 if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
             } catch { }
-        const currentNodes = rf.getNodes()
-        const currentEdges = rf.getEdges()
+            const currentNodes = rf.getNodes()
+            const currentEdges = rf.getEdges()
             const visible = computeVisibleNodeIds(currentNodes, new Set([...Array.from(expandedNodeIds), parentId]))
             const useNodes = currentNodes.filter((n) => visible.has(n.id))
             const useEdges = currentEdges.filter((e) => visible.has(e.source) && visible.has(e.target))

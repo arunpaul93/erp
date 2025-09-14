@@ -112,8 +112,9 @@ body {
   from {
     stroke-dashoffset: 0;
   }
+
   to {
-  /* move opposite direction by roughly the path length so the pulse wraps once per cycle */
-  stroke-dashoffset: calc(-1 * var(--edge-len, 300px));
+    /* move opposite direction by roughly the path length so the pulse wraps once per cycle */
+    stroke-dashoffset: calc(-1 * var(--edge-len, 300px));
   }
 }
