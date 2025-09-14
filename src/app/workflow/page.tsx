@@ -1450,7 +1450,8 @@ function WorkflowInner() {
                 return
             }
             const target = event.target as HTMLElement | null
-            // Don't create if we dropped on a node/handle; allow anywhere on the flow pane/viewport
+            
+            // Helper function to check if element has a specific class
             const isWithinClass = (el: HTMLElement | null, cls: string) => {
                 let cur: HTMLElement | null = el
                 while (cur) {
@@ -1459,32 +1460,84 @@ function WorkflowInner() {
                 }
                 return false
             }
-            const droppedOnNode = isWithinClass(target, 'react-flow__node') || isWithinClass(target, 'react-flow__handle')
-            if (droppedOnNode) {
+            
+            // Helper function to find the node ID from a DOM element
+            const findNodeIdFromElement = (el: HTMLElement | null): string | null => {
+                let cur: HTMLElement | null = el
+                while (cur) {
+                    if (cur.classList && cur.classList.contains('react-flow__node')) {
+                        // Look for data-id attribute on the node
+                        const nodeId = cur.getAttribute('data-id')
+                        if (nodeId) return nodeId
+                    }
+                    cur = cur.parentElement as HTMLElement | null
+                }
+                return null
+            }
+            
+            // Check if we dropped on a handle (never allow)
+            const droppedOnHandle = isWithinClass(target, 'react-flow__handle')
+            if (droppedOnHandle) {
                 setConnectingFromId(null)
                 setDidConnect(false)
                 return
+            }
+            
+            // Check if we dropped on a node
+            const droppedOnNode = isWithinClass(target, 'react-flow__node')
+            let targetContainerId: string | null = null
+            
+            if (droppedOnNode) {
+                // Find which node we dropped on
+                const nodeId = findNodeIdFromElement(target)
+                if (nodeId) {
+                    const targetNode = rf.getNode(nodeId)
+                    const isExpandedContainer = targetNode && (targetNode.data as any)?.expanded === true
+                    
+                    if (isExpandedContainer) {
+                        // Allow drop inside expanded container - use container as parent
+                        targetContainerId = nodeId
+                    } else {
+                        // Don't allow drop on regular nodes
+                        setConnectingFromId(null)
+                        setDidConnect(false)
+                        return
+                    }
+                }
             }
             // support mouse and touch
             const isTouch = 'changedTouches' in (event as any) && (event as any).changedTouches?.length > 0
             const clientX = isTouch ? (event as any).changedTouches[0].clientX : (event as any).clientX
             const clientY = isTouch ? (event as any).changedTouches[0].clientY : (event as any).clientY
             const pos = rf.screenToFlowPosition({ x: clientX, y: clientY })
-            // Create the next node at the same level: use the source node's parentId (null for roots)
+            
+            // Determine parent for the new node
             const srcNode = connectingFromId ? rf.getNode(connectingFromId) : null
-            const parentPid: string | null = ((srcNode?.data as any)?.parentId as string | null | undefined) ?? null
+            let parentPid: string | null
+            
+            if (targetContainerId) {
+                // Dropped inside a container - new node becomes child of that container
+                parentPid = targetContainerId
+            } else {
+                // Dropped outside any container - create sibling by using source node's parent
+                parentPid = ((srcNode?.data as any)?.parentId as string | null | undefined) ?? null
+            }
+            
             const newId = generateUuid()
             const newNode: Node = {
                 id: newId,
                 type: 'side',
-                // Make this a sibling by sharing the same parentId as the source
-                data: { label: 'New Step', parentId: parentPid },
+                data: { 
+                    label: 'New Step', 
+                    parentId: parentPid 
+                },
                 position: pos,
             }
             const newEdge: Edge = { id: generateUuid(), source: connectingFromId, target: newId, type: 'editableLabel', data: { label: '' } } as any
             setNodes((nds) => nds.concat(newNode))
             setEdges((eds) => eds.concat(newEdge))
-            // Ensure the parent container is expanded so the sibling is visible (if it has a parent)
+            
+            // Ensure the parent container is expanded so the new node is visible
             if (parentPid) {
                 setExpandedNodeIds((prev) => { const next = new Set(prev); next.add(parentPid); return next })
             }
@@ -1494,6 +1547,7 @@ function WorkflowInner() {
                     const all = rf.getNodes()
                     let group: Node[] = []
                     if (parentPid) {
+                        // Include the parent and all its children (including the new sibling)
                         group = all.filter((n) => n.id === parentPid || (n.data as any)?.parentId === parentPid)
                     } else {
                         const src = all.find((n) => n.id === connectingFromId)
