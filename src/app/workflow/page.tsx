@@ -1077,36 +1077,66 @@ function WorkflowInner() {
                 return
             }
             const target = event.target as HTMLElement | null
-            const isPane = !!target && target.classList.contains('react-flow__pane')
-            if (!isPane) return
+            // Don't create if we dropped on a node/handle; allow anywhere on the flow pane/viewport
+            const isWithinClass = (el: HTMLElement | null, cls: string) => {
+                let cur: HTMLElement | null = el
+                while (cur) {
+                    if (cur.classList && cur.classList.contains(cls)) return true
+                    cur = cur.parentElement as HTMLElement | null
+                }
+                return false
+            }
+            const droppedOnNode = isWithinClass(target, 'react-flow__node') || isWithinClass(target, 'react-flow__handle')
+            if (droppedOnNode) {
+                setConnectingFromId(null)
+                setDidConnect(false)
+                return
+            }
             // support mouse and touch
             const isTouch = 'changedTouches' in (event as any) && (event as any).changedTouches?.length > 0
             const clientX = isTouch ? (event as any).changedTouches[0].clientX : (event as any).clientX
             const clientY = isTouch ? (event as any).changedTouches[0].clientY : (event as any).clientY
             const pos = rf.screenToFlowPosition({ x: clientX, y: clientY })
-            // Determine the parent process for the new subprocess: if the source is inside a container,
-            // use its parent process; otherwise use the source itself (creating a child of a root)
+            // Create the next node at the same level: use the source node's parentId (null for roots)
             const srcNode = connectingFromId ? rf.getNode(connectingFromId) : null
-            const parentPid = (srcNode?.data as any)?.parentId ?? srcNode?.id ?? connectingFromId
+            const parentPid: string | null = ((srcNode?.data as any)?.parentId as string | null | undefined) ?? null
             const newId = generateUuid()
             const newNode: Node = {
                 id: newId,
                 type: 'side',
-                // Make this a child subprocess of the parent process
+                // Make this a sibling by sharing the same parentId as the source
                 data: { label: 'New Step', parentId: parentPid },
                 position: pos,
             }
             const newEdge: Edge = { id: generateUuid(), source: connectingFromId, target: newId, type: 'editableLabel', data: { label: '' } } as any
             setNodes((nds) => nds.concat(newNode))
             setEdges((eds) => eds.concat(newEdge))
-            // Fit the view to the parent group's region
+            // Ensure the parent container is expanded so the sibling is visible (if it has a parent)
+            if (parentPid) {
+                setExpandedNodeIds((prev) => { const next = new Set(prev); next.add(parentPid); return next })
+            }
+            // Fit the view to the relevant region (parent group if any, otherwise source+new for roots)
             setTimeout(() => {
                 try {
                     const all = rf.getNodes()
-                    const group = all.filter((n) => n.id === parentPid || (n.data as any)?.parentId === parentPid)
+                    let group: Node[] = []
+                    if (parentPid) {
+                        group = all.filter((n) => n.id === parentPid || (n.data as any)?.parentId === parentPid)
+                    } else {
+                        const src = all.find((n) => n.id === connectingFromId)
+                        const created = all.find((n) => n.id === newId)
+                        group = [src, created].filter(Boolean) as Node[]
+                    }
                     if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
                 } catch { }
-                const { nodes: laid } = layout(rf.getNodes(), rf.getEdges(), layoutConfig, expandedNodeIds)
+                // Use an expanded set that includes the parent we just expanded (if any)
+                const nextExpanded = parentPid ? new Set([...Array.from(expandedNodeIds), parentPid]) : new Set(expandedNodeIds)
+                const currentNodes = rf.getNodes()
+                const currentEdges = rf.getEdges()
+                const visible = computeVisibleNodeIds(currentNodes, nextExpanded)
+                const useNodes = currentNodes.filter((n) => visible.has(n.id))
+                const useEdges = currentEdges.filter((e) => visible.has(e.source) && visible.has(e.target))
+                const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, nextExpanded)
                 animateToLayout(laid, 260)
             }, 0)
             setConnectingFromId(null)
@@ -1154,6 +1184,41 @@ function WorkflowInner() {
         }
         setMenuPos(null)
     }, [menuTarget, setNodes, setEdges, edges])
+
+    // Create a new sub process under a node and connect it
+    const createSubprocess = useCallback((parentId: string) => {
+        const newId = generateUuid()
+        const child: Node = {
+            id: newId,
+            type: 'side',
+            data: { label: 'New Step', parentId },
+            position: { x: 0, y: 0 },
+        }
+        // Add the child only; no edge is created between process and subprocess
+        setNodes((nds) => nds.concat(child))
+        // Ensure parent is expanded so the new child is visible
+        setExpandedNodeIds((prev) => {
+            const next = new Set(prev)
+            next.add(parentId)
+            return next
+        })
+        // Fit and animate to layout next frame
+        setTimeout(() => {
+            try {
+                const all = rf.getNodes()
+                const group = all.filter((n) => n.id === parentId || (n.data as any)?.parentId === parentId)
+                if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
+            } catch { }
+        const currentNodes = rf.getNodes()
+        const currentEdges = rf.getEdges()
+            const visible = computeVisibleNodeIds(currentNodes, new Set([...Array.from(expandedNodeIds), parentId]))
+            const useNodes = currentNodes.filter((n) => visible.has(n.id))
+            const useEdges = currentEdges.filter((e) => visible.has(e.source) && visible.has(e.target))
+            const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, new Set([...Array.from(expandedNodeIds), parentId]))
+            animateToLayout(laid, 260)
+        }, 0)
+        setMenuPos(null)
+    }, [generateUuid, setNodes, rf, expandedNodeIds, layoutConfig, animateToLayout])
 
     // Normalize any temporary IDs to UUIDs (for prior sessions) and update state
     const normalizeIdsIfNeeded = useCallback(() => {
@@ -1641,7 +1706,14 @@ function WorkflowInner() {
                                 style={{ left: menuPos.x, top: menuPos.y }}
                                 onClick={(e) => e.stopPropagation()}
                             >
-                                {/* removed Add child action */}
+                                {menuTarget.kind === 'node' && (
+                                    <button
+                                        className="px-3 py-1.5 text-sm w-full text-left hover:bg-gray-700"
+                                        onClick={() => createSubprocess(menuTarget.id)}
+                                    >
+                                        Create sub process
+                                    </button>
+                                )}
                                 <button
                                     className="px-3 py-1.5 text-sm w-full text-left hover:bg-gray-700"
                                     onClick={deleteMenuTarget}
