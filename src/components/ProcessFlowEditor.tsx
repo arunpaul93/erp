@@ -21,7 +21,9 @@ import ReactFlow, {
     NodeProps,
     OnConnectStartParams,
     ConnectionLineType,
-    ReactFlowProvider
+    ReactFlowProvider,
+    applyNodeChanges,
+    NodeChange
 } from 'reactflow'
 import 'reactflow/dist/style.css'
 
@@ -530,43 +532,12 @@ const ProcessFlowEditorInner = React.forwardRef<
         })
     }, [groupPadding])
 
-        // Effect: whenever nodes change, recompute parent sizes/positions and update only when needed.
-        // Includes an additional signature guard to avoid update loops when values are effectively unchanged.
-        useEffect(() => {
-            const updated = recomputeParentSizes(nodes)
+    // Helper: apply node updates and auto-wrap in one go
+    const setNodesWrapped = useCallback((updater: (prev: Node[]) => Node[]) => {
+        setNodes(prev => recomputeParentSizes(updater(prev)))
+    }, [setNodes, recomputeParentSizes])
 
-            // Order-independent signature of relevant layout fields
-            const makeSig = (arr: Node[]) => arr
-                .slice()
-                .sort((a, b) => a.id.localeCompare(b.id))
-                .map(n => `${n.id}:${n.position.x},${n.position.y}:${(n as any).style?.width ?? ''}x${(n as any).style?.height ?? ''}`)
-                .join('|')
-
-            const curSig = makeSig(nodes)
-            const newSig = makeSig(updated)
-            if (newSig === curSig) return
-
-            // Detect meaningful changes (position/width/height/metadata.size)
-            let changed = false
-            if (updated.length !== nodes.length) {
-                changed = true
-            } else {
-                const byId = new Map(updated.map(n => [n.id, n] as const))
-                for (const n of nodes) {
-                    const u = byId.get(n.id)
-                    if (!u) { changed = true; break }
-                    const nW = (n as any).style?.width
-                    const nH = (n as any).style?.height
-                    const uW = (u as any).style?.width
-                    const uH = (u as any).style?.height
-                    const nSz = (n as any).data?.stepData?.metadata?.size
-                    const uSz = (u as any).data?.stepData?.metadata?.size
-                    const posDiff = n.position.x !== u.position.x || n.position.y !== u.position.y
-                    if (posDiff || nW !== uW || nH !== uH || (nSz?.width !== uSz?.width) || (nSz?.height !== uSz?.height)) { changed = true; break }
-                }
-            }
-            if (changed) setNodes(updated)
-        }, [nodes, recomputeParentSizes, setNodes])
+    // Removed nodes-driven auto-wrap effect to prevent update loops; recompute happens inside onNodesChange instead.
     const [originalSteps, setOriginalSteps] = useState<ProcessStepData[]>([])
     const [originalEdges, setOriginalEdges] = useState<ProcessFlowEdgeData[]>([])
     const [isLoading, setIsLoading] = useState(false)
@@ -652,10 +623,21 @@ const ProcessFlowEditorInner = React.forwardRef<
         description: string
     } | null>(null)
 
-    // Custom onNodesChange
-    const onNodesChange = useCallback((changes: any[]) => {
-        defaultOnNodesChange(changes)
-    }, [defaultOnNodesChange])
+    // Custom onNodesChange: apply changes, then recompute auto-wrap once, and set if different
+    const onNodesChange = useCallback((changes: NodeChange[]) => {
+        setNodes(prev => {
+            const applied = applyNodeChanges(changes, prev)
+            const updated = recomputeParentSizes(applied)
+            // Compare order-independent signature to decide whether to commit
+            const makeSig = (arr: Node[]) => arr
+                .slice()
+                .sort((a, b) => a.id.localeCompare(b.id))
+                .map(n => `${n.id}:${n.position.x},${n.position.y}:${(n as any).style?.width ?? ''}x${(n as any).style?.height ?? ''}`)
+                .join('|')
+            if (makeSig(updated) === makeSig(prev)) return prev
+            return updated
+        })
+    }, [recomputeParentSizes, setNodes])
 
     // Handle right-click context menu
     const handleContextMenu = useCallback((event: React.MouseEvent) => {
@@ -905,7 +887,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             await saveProcessStep(stepData)
             
             // Add the new node
-            setNodes(nds => [...nds, newNode])
+            setNodesWrapped(nds => [...nds, newNode])
             
             // Create edge from source to new node
             const edgeData: ProcessFlowEdgeData = {
@@ -1012,7 +994,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             }
 
             // Update parent and add child
-            setNodes(nds => nds.map(n => n.id === parentNodeId ? ({
+            setNodesWrapped(nds => nds.map(n => n.id === parentNodeId ? ({
                 ...n,
                 selectable: false,
                 data: { ...n.data, stepData: updatedParentStepData }
@@ -1269,7 +1251,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             setOriginalEdges(edgeData)
 
             const { nodes: reactFlowNodes, edges: reactFlowEdges } = convertFromSupabase(steps, edgeData)
-            setNodes(reactFlowNodes)
+            setNodes(recomputeParentSizes(reactFlowNodes))
             setEdges(reactFlowEdges)
 
         } catch (err) {
@@ -1458,7 +1440,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             },
         }
 
-        setNodes((nds) => [...nds, newNode])
+    setNodesWrapped((nds) => [...nds, newNode])
         setEditingNode({ id, name: 'New Step', description: '' })
     }, [selectedOrgId, setNodes])
 
@@ -1484,7 +1466,7 @@ const ProcessFlowEditorInner = React.forwardRef<
                 onSubStepMove: (subId: string, pos: { x: number; y: number }) => updateEmbeddedSubStep(id, subId, pos)
             }
         }
-        setNodes(nds => [...nds, newNode])
+    setNodesWrapped(nds => [...nds, newNode])
         setEditingNode({ id, name: 'New Step', description: '' })
     }, [selectedOrgId, setNodes])
 
@@ -1547,7 +1529,7 @@ const ProcessFlowEditorInner = React.forwardRef<
         if (contextMenu.type === 'node' && contextMenu.target) {
             // Delete node and associated edges
             const nodeId = contextMenu.target.id
-            setNodes((nds) => nds.filter(n => n.id !== nodeId))
+            setNodesWrapped((nds) => nds.filter(n => n.id !== nodeId))
             setEdges((eds) => eds.filter(e => e.source !== nodeId && e.target !== nodeId))
             setSelectedNode(null)
             setEditingNode(null)
@@ -1565,7 +1547,7 @@ const ProcessFlowEditorInner = React.forwardRef<
     const deleteSelected = useCallback(() => {
         if (selectedNode) {
             const nodeId = selectedNode.id
-            setNodes((nds) => nds.filter(n => n.id !== nodeId))
+            setNodesWrapped((nds) => nds.filter(n => n.id !== nodeId))
             setEdges((eds) => eds.filter(e => e.source !== nodeId && e.target !== nodeId))
             setSelectedNode(null)
             setEditingNode(null)
