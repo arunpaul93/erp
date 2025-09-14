@@ -27,6 +27,10 @@ import 'reactflow/dist/style.css'
 
 const GRID_SIZE = 16
 
+// Config: default group container padding
+// x: left/right inner margin, y: bottom inner margin, header: reserved top header height
+const GROUP_PADDING_DEFAULT = { x: 24, y: 24, header: 64 }
+
 // Simple UUID v4 generator (fallback without external deps)
 function uuidv4() {
     // Source: RFC4122 compliant enough for client IDs
@@ -75,9 +79,11 @@ function ProcessStepNode({ data, selected }: NodeProps) {
                 className={`rounded-lg border-2 ${selected ? 'border-yellow-400' : 'border-gray-600'} hover:border-yellow-400 transition-colors relative pointer-events-none`}
                 style={{ width: size.width, height: size.height, overflow: 'visible', background: 'none', zIndex: -1 }}
             >
-                {/* Left target/source overlapped (show as single dot) */}
+                {/* Left target/source overlapped (show as single dot). For subprocess parents, disable left-source to enforce left-input only. */}
                 <Handle id="left-target" type="target" position={Position.Left} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 12 }} />
-                <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 13 }} />
+                {!isSubProcess && (
+                    <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400 parent-left-source pointer-events-auto" style={{ zIndex: 13 }} />
+                )}
                     <div className="absolute inset-0 flex flex-col pointer-events-none">
                         <div
                             className="px-3 py-2 text-center pointer-events-auto rf-drag-handle cursor-move select-none"
@@ -89,43 +95,12 @@ function ProcessStepNode({ data, selected }: NodeProps) {
                     </div>
                     <div className="flex-1 relative nodrag nopan nowheel pointer-events-none" style={{ zIndex: 0 }}>
                         {/* Child nodes render here via React Flow; no embedded DOM needed */}
-                        {/* Resize handle (bottom-right) */}
-                        <div
-                            role="button"
-                            aria-label="Resize"
-                            title="Resize"
-                            onPointerDown={(e) => {
-                                e.preventDefault(); e.stopPropagation();
-                                try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) } catch {}
-                                const startX = e.clientX; const startY = e.clientY
-                                const startW = data.stepData?.metadata?.size?.width || 420
-                                const startH = data.stepData?.metadata?.size?.height || 300
-                                const MIN_W = 300; const MIN_H = 200
-                                const onMove = (ev: PointerEvent) => {
-                                    ev.preventDefault()
-                                    const w = Math.max(MIN_W, startW + (ev.clientX - startX))
-                                    const h = Math.max(MIN_H, startH + (ev.clientY - startY))
-                                    // Update live (visual) via callback if provided
-                                    data.onResize?.({ width: w, height: h })
-                                }
-                                const onUp = (ev: PointerEvent) => {
-                                    ev.preventDefault()
-                                    window.removeEventListener('pointermove', onMove)
-                                    window.removeEventListener('pointerup', onUp)
-                                    const w = Math.max(MIN_W, startW + (ev.clientX - startX))
-                                    const h = Math.max(MIN_H, startH + (ev.clientY - startY))
-                                    data.onResizeEnd?.({ width: w, height: h })
-                                }
-                                window.addEventListener('pointermove', onMove)
-                                window.addEventListener('pointerup', onUp)
-                            }}
-                            className="absolute bottom-1 right-1 w-4 h-4 bg-yellow-500 rounded-sm cursor-nwse-resize shadow border border-yellow-400 pointer-events-auto"
-                            style={{ zIndex: 3, pointerEvents: 'auto' }}
-                        />
                     </div>
                 </div>
-                {/* Right target/source overlapped */}
-                <Handle id="right-target" type="target" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 12 }} />
+                {/* Right target/source overlapped. For subprocess parents, disable right-target to enforce right-output only. */}
+                {!isSubProcess && (
+                    <Handle id="right-target" type="target" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 12 }} />
+                )}
                 <Handle id="right-source" type="source" position={Position.Right} className="w-3 h-3 bg-yellow-400 pointer-events-auto" style={{ zIndex: 13 }} />
             </div>
         )
@@ -133,12 +108,16 @@ function ProcessStepNode({ data, selected }: NodeProps) {
     // Unified node rendering for both regular and sub-process nodes
     return (
         <div className={`px-4 py-3 shadow-lg rounded-lg bg-gray-800 border-2 ${selected ? 'border-yellow-400' : 'border-gray-600'} hover:border-yellow-400 transition-colors min-w-[150px]`}>
+            {/* Input should be from the left for subprocesses (and allowed for regular nodes) */}
             <Handle id="left-target" type="target" position={Position.Left} className="w-3 h-3 bg-yellow-400" style={{ zIndex: 1 }} />
             <div className="font-medium text-gray-100">{data.label}</div>
             {data.description && (
                 <div className="text-xs text-gray-400 mt-1">{data.description}</div>
             )}
-            <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400" style={{ zIndex: 2 }} />
+            {/* For subprocesses, outputs should be from the right edge only */}
+            {!isSubProcess && (
+                <Handle id="left-source" type="source" position={Position.Left} className="w-3 h-3 bg-yellow-400" style={{ zIndex: 2 }} />
+            )}
             <Handle id="right-source" type="source" position={Position.Right} className="w-3 h-3 bg-yellow-400" />
         </div>
     )
@@ -388,6 +367,8 @@ interface ProcessFlowEditorProps {
     layoutSpacing?: { x: number; y: number }
     // Grid spacing for background grid
     gridGap?: number
+    // Group container padding config; overrides defaults used for auto-wrap/clamps
+    groupPadding?: { x: number; y: number; header: number }
     // When provided, controls spacing for clamps/margins, not for auto layout
     ref?: React.Ref<{ saveProcessFlow: () => Promise<void> }>
 }
@@ -401,7 +382,8 @@ const ProcessFlowEditorInner = React.forwardRef<
     onSave,
     hideToolbar = false,
     layoutSpacing = { x: 60, y: 80 },
-    gridGap = 16
+    gridGap = 16,
+    groupPadding = GROUP_PADDING_DEFAULT
 }, ref) => {
     const { user } = useAuth()
     const { selectedOrgId } = useOrg()
@@ -412,83 +394,162 @@ const ProcessFlowEditorInner = React.forwardRef<
 
     // State declarations first
     const [organisationId] = useState<string>(selectedOrgId || 'c6b0261b-690f-4c43-9b79-3426a7b97804') // Use actual org or fallback
-        // Recompute parent node sizes based on child bounds
+    // Recompute parent node sizes and positions based on child bounds (all sides)
     const recomputeParentSizes = useCallback((currentNodes: Node[]): Node[] => {
-            // Apply hierarchy spacing as inner margin to walls; keep header reserved at top
-            const INNER_MARGIN = layoutSpacing.y
-            const UPDATED_PADDING = { x: INNER_MARGIN, y: INNER_MARGIN } // right/bottom margins; header is handled by child clamps
-            const FALLBACK_CHILD_SIZE = { w: 150, h: 60 }
+        // Padding config
+        const PADDING_RIGHT = groupPadding.x
+        const PADDING_BOTTOM = groupPadding.y
+        const PADDING_LEFT = groupPadding.x
+        const HEADER_TOP = groupPadding.header
+        const FALLBACK_CHILD_SIZE = { w: 150, h: 60 }
 
-            const childrenByParent: Record<string, Node[]> = {}
-            currentNodes.forEach(n => {
-                if (n.parentNode) {
-                    if (!childrenByParent[n.parentNode]) childrenByParent[n.parentNode] = []
-                    childrenByParent[n.parentNode].push(n)
+        // Group children by parent
+        const childrenByParent: Record<string, Node[]> = {}
+        currentNodes.forEach(n => {
+            if (n.parentNode) {
+                if (!childrenByParent[n.parentNode]) childrenByParent[n.parentNode] = []
+                childrenByParent[n.parentNode].push(n)
+            }
+        })
+
+        // First compute adjustments per parent (desired size and deltas)
+        type Adjust = {
+            desiredWidth: number
+            desiredHeight: number
+            parentDeltaX: number
+            parentDeltaY: number
+            childDeltaX: number
+            childDeltaY: number
+        }
+        const adjustByParent: Record<string, Adjust> = {}
+
+        currentNodes.forEach(node => {
+            const kids = childrenByParent[node.id] || []
+            const hasChildrenFlag = !!(node as any).data?.stepData?.metadata?.hasSubProcesses
+            const isParent = hasChildrenFlag || kids.length > 0
+            if (!isParent) return
+
+            if (kids.length === 0) {
+                adjustByParent[node.id] = {
+                    desiredWidth: 420,
+                    desiredHeight: 300,
+                    parentDeltaX: 0,
+                    parentDeltaY: 0,
+                    childDeltaX: 0,
+                    childDeltaY: 0
                 }
+                return
+            }
+
+            // Compute child bounds (relative to parent origin)
+            let minX = Infinity, minY = Infinity, maxX = 0, maxY = 0
+            kids.forEach(c => {
+                const cw = (c as any).width || FALLBACK_CHILD_SIZE.w
+                const ch = (c as any).height || FALLBACK_CHILD_SIZE.h
+                minX = Math.min(minX, c.position.x)
+                minY = Math.min(minY, c.position.y)
+                maxX = Math.max(maxX, c.position.x + cw)
+                maxY = Math.max(maxY, c.position.y + ch)
             })
 
-            return currentNodes.map(node => {
-                const kids = childrenByParent[node.id] || []
-                const hasChildrenFlag = !!(node as any).data?.stepData?.metadata?.hasSubProcesses
-                const isParent = hasChildrenFlag || kids.length > 0
-                if (!isParent) return node
+            // Base desired size from right/bottom bounds
+            const baseWidth = Math.max(420, maxX + PADDING_RIGHT)
+            const baseHeight = Math.max(300, maxY + PADDING_BOTTOM)
 
-        if (kids.length === 0) {
-                    const defaultWidth = 420
-                    const defaultHeight = 300
-            return {
-                        ...node,
-        style: { ...(node.style || {}), width: defaultWidth, height: defaultHeight },
-                        data: {
-                            ...node.data,
-                            stepData: {
-                                ...node.data.stepData,
-                                metadata: { ...(node.data.stepData?.metadata || {}), size: { width: defaultWidth, height: defaultHeight } }
-                            }
-                        }
-                    }
-                }
+            // Left/top delta so that minX -> PADDING_LEFT and minY -> HEADER_TOP
+            const dxLeftDelta = PADDING_LEFT - minX // positive => expand left, negative => shrink left
+            const dyTopDelta = HEADER_TOP - minY // positive => expand top, negative => shrink top
 
-                let maxX = 0, maxY = 0
-                kids.forEach(c => {
-                    const cw = (c as any).width || FALLBACK_CHILD_SIZE.w
-                    const ch = (c as any).height || FALLBACK_CHILD_SIZE.h
-                    maxX = Math.max(maxX, c.position.x + cw)
-                    maxY = Math.max(maxY, c.position.y + ch)
-                })
+            const desiredWidth = Math.max(420, baseWidth + dxLeftDelta)
+            const desiredHeight = Math.max(300, baseHeight + dyTopDelta)
 
-                // Ensure a right and bottom margin equals hierarchy gap; top header + top margin comes from child y positions
-                const contentMinWidth = Math.max(420, maxX + UPDATED_PADDING.x)
-                const contentMinHeight = Math.max(300, maxY + UPDATED_PADDING.y)
+            // To keep children absolute positions unchanged when moving parent,
+            // parent moves opposite to the delta, children shift by the delta.
+            const parentDeltaX = -dxLeftDelta
+            const parentDeltaY = -dyTopDelta
+            const childDeltaX = dxLeftDelta
+            const childDeltaY = dyTopDelta
+
+            adjustByParent[node.id] = { desiredWidth, desiredHeight, parentDeltaX, parentDeltaY, childDeltaX, childDeltaY }
+        })
+
+        // Now apply adjustments to nodes
+        return currentNodes.map(node => {
+            // If this node is a parent with adjustments, update size and position
+            const adj = adjustByParent[node.id]
+            if (adj) {
                 const curSize = (node as any).data?.stepData?.metadata?.size || {}
-                const desiredWidth = Math.max(curSize.width || 420, contentMinWidth)
-                const desiredHeight = Math.max(curSize.height || 300, contentMinHeight)
-                if (curSize.width === desiredWidth && curSize.height === desiredHeight) return node
+                const nextWidth = adj.desiredWidth
+                const nextHeight = adj.desiredHeight
+                const nextPos = { x: node.position.x + adj.parentDeltaX, y: node.position.y + adj.parentDeltaY }
+
+                const sizeUnchanged = (curSize.width || 0) === nextWidth && (curSize.height || 0) === nextHeight
+                const posUnchanged = node.position.x === nextPos.x && node.position.y === nextPos.y
+                if (sizeUnchanged && posUnchanged) return node
 
                 return {
                     ...node,
-                    style: { ...(node.style || {}), width: desiredWidth, height: desiredHeight },
+                    position: nextPos,
+                    style: { ...(node.style || {}), width: nextWidth, height: nextHeight },
                     data: {
                         ...node.data,
                         stepData: {
                             ...node.data.stepData,
-                            metadata: { ...(node.data.stepData?.metadata || {}), size: { width: desiredWidth, height: desiredHeight } }
+                            metadata: { ...(node.data.stepData?.metadata || {}), size: { width: nextWidth, height: nextHeight } }
                         }
                     }
                 }
-            })
-    }, [layoutSpacing])
+            }
 
-        // Effect: whenever nodes change, recompute parent sizes
+            // If this node is a child, shift by its parent's child delta
+            if (node.parentNode && adjustByParent[node.parentNode]) {
+                const padj = adjustByParent[node.parentNode]
+                const nextPos = { x: node.position.x + padj.childDeltaX, y: node.position.y + padj.childDeltaY }
+                const posUnchanged = node.position.x === nextPos.x && node.position.y === nextPos.y
+                if (posUnchanged) return node
+
+                return {
+                    ...node,
+                    position: nextPos,
+                    data: {
+                        ...node.data,
+                        // keep metadata in sync for consumers that read it during the session
+                        stepData: {
+                            ...node.data.stepData,
+                            metadata: { ...(node.data.stepData?.metadata || {}), position: nextPos }
+                        }
+                    }
+                }
+            }
+
+            return node
+        })
+    }, [groupPadding])
+
+        // Effect: whenever nodes change, recompute parent sizes/positions and update only when needed
         useEffect(() => {
-            const timer = setTimeout(() => {
-                setNodes(old => {
-                    const updated = recomputeParentSizes(old)
-                    return updated
-                })
-            }, 10)
-            return () => clearTimeout(timer)
-        }, [recomputeParentSizes, setNodes])
+            const updated = recomputeParentSizes(nodes)
+            // Detect meaningful changes (position/width/height/metadata.size)
+            let changed = false
+            if (updated.length !== nodes.length) {
+                changed = true
+            } else {
+                const byId = new Map(updated.map(n => [n.id, n] as const))
+                for (const n of nodes) {
+                    const u = byId.get(n.id)
+                    if (!u) { changed = true; break }
+                    const nW = (n as any).style?.width
+                    const nH = (n as any).style?.height
+                    const uW = (u as any).style?.width
+                    const uH = (u as any).style?.height
+                    const nSz = (n as any).data?.stepData?.metadata?.size
+                    const uSz = (u as any).data?.stepData?.metadata?.size
+                    const posDiff = n.position.x !== u.position.x || n.position.y !== u.position.y
+                    if (posDiff || nW !== uW || nH !== uH || (nSz?.width !== uSz?.width) || (nSz?.height !== uSz?.height)) { changed = true; break }
+                }
+            }
+            if (changed) setNodes(updated)
+        }, [nodes, recomputeParentSizes, setNodes])
     const [originalSteps, setOriginalSteps] = useState<ProcessStepData[]>([])
     const [originalEdges, setOriginalEdges] = useState<ProcessFlowEdgeData[]>([])
     const [isLoading, setIsLoading] = useState(false)
@@ -889,8 +950,8 @@ const ProcessFlowEditorInner = React.forwardRef<
             const relativeY = dropPosition.y - parentNode.position.y
             
             // Ensure the child is positioned within the parent's content area (after header)
-        const headerHeight = PADDING.y
-    const margin = layoutSpacing.y
+    const headerHeight = groupPadding.header
+    const margin = groupPadding.x
         const childWidth = 140
         const childHeight = 70
             
@@ -1051,70 +1112,13 @@ const ProcessFlowEditorInner = React.forwardRef<
             },
         }))
 
-        // Parent nodes get callbacks; child nodes will be added below
+        // Parent nodes have no manual resize; size auto-wraps children.
         const parentNodesWithData = reactFlowNodes.map(n => ({
             ...n,
             data: {
                 ...n.data,
-                onResize: ({ width, height }: { width: number; height: number }) => {
-                    const MARGIN = layoutSpacing.y; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
-                    setNodes(nds => {
-                        // Update parent size
-                        const updated = nds.map(nn => nn.id === n.id ? ({
-                            ...nn,
-                            style: { ...(nn.style || {}), width, height },
-                            data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: { ...(nn.data.stepData?.metadata || {}), size: { width, height } } } }
-                        }) : nn)
-                        // Clamp children inside new bounds
-                        return updated.map(nn => {
-                            if (nn.parentNode !== n.id) return nn
-                            const maxX = Math.max(MARGIN, width - CHILD_W - MARGIN)
-                            const maxY = Math.max(HEADER, height - CHILD_H - MARGIN)
-                            const nx = Math.min(Math.max(nn.position.x, MARGIN), maxX)
-                            const ny = Math.min(Math.max(nn.position.y, HEADER), maxY)
-                            if (nx === nn.position.x && ny === nn.position.y) return nn
-                            return {
-                                ...nn,
-                                position: { x: nx, y: ny },
-                                data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: { ...(nn.data.stepData?.metadata || {}), position: { x: nx, y: ny } } } }
-                            }
-                        })
-                    })
-                },
-                onResizeEnd: ({ width, height }: { width: number; height: number }) => {
-                    const MARGIN = layoutSpacing.y; const HEADER = 64; const CHILD_W = 150; const CHILD_H = 60
-                    // Persist parent size
-                    void supabase.from('process_step').update({
-                        metadata: { ...(n.data.stepData?.metadata || {}), size: { width, height } }
-                    }).eq('id', n.id).then(() => {}, (err) => console.error(err))
-
-                    // Clamp and persist child positions if changed
-                    const toPersist: { id: string; x: number; y: number; metadata: any }[] = []
-                    setNodes(nds => nds.map(nn => {
-                        if (nn.parentNode !== n.id) return nn
-                        const maxX = Math.max(MARGIN, width - CHILD_W - MARGIN)
-                        const maxY = Math.max(HEADER, height - CHILD_H - MARGIN)
-                        const nx = Math.min(Math.max(nn.position.x, MARGIN), maxX)
-                        const ny = Math.min(Math.max(nn.position.y, HEADER), maxY)
-                        if (nx === nn.position.x && ny === nn.position.y) return nn
-                        const newMeta = { ...(nn.data.stepData?.metadata || {}), position: { x: nx, y: ny } }
-                        toPersist.push({ id: nn.id, x: nx, y: ny, metadata: newMeta })
-                        return { ...nn, position: { x: nx, y: ny }, data: { ...nn.data, stepData: { ...nn.data.stepData, metadata: newMeta } } }
-                    }))
-                    // Persist asynchronously
-                    void (async () => {
-                        for (const c of toPersist) {
-                            try {
-                                await supabase.from('process_step').update({ metadata: c.metadata }).eq('id', c.id)
-                            } catch (e) {
-                                console.error('Failed to persist clamped child position', c.id, e)
-                            }
-                        }
-                    })()
-        }
-            }
+            },
         }))
-
         // Build a quick map of parent sizes
         const parentSizeMap = new Map<string, { width: number; height: number }>()
         parentsWithSubProcesses.forEach(p => {
@@ -1133,8 +1137,8 @@ const ProcessFlowEditorInner = React.forwardRef<
         const childNodes: Node[] = validSubProcessSteps.map(s => {
             const parentId = s.parent_step_id!
             const size = parentSizeMap.get(parentId) || { width: 420, height: 300 }
-            const margin = layoutSpacing.y
-            const header = 64
+            const margin = groupPadding.x
+            const header = groupPadding.header
             const childW = 150
             const childH = 60
             const p = s.metadata?.position || { x: margin, y: header }
