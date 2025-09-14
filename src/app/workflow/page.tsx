@@ -85,10 +85,18 @@ function SideNode(
     const commit = useCallback((next: string) => {
         const event = new CustomEvent('updateNodeLabel', { detail: { nodeId: id, newLabel: next } })
         window.dispatchEvent(event)
+        // signal edit end so outer graph can resume auto-layout
+        const endEvt = new CustomEvent('endNodeEdit', { detail: { nodeId: id } })
+        window.dispatchEvent(endEvt)
         setIsEditing(false)
     }, [id])
 
-    const cancel = useCallback(() => setIsEditing(false), [])
+    const cancel = useCallback(() => {
+        // signal edit end on cancel as well
+        const endEvt = new CustomEvent('endNodeEdit', { detail: { nodeId: id } })
+        window.dispatchEvent(endEvt)
+        setIsEditing(false)
+    }, [id])
 
     // Ask the graph to enter edit mode for this node (so auto-layout pauses)
     const requestEdit = useCallback(() => {
@@ -112,7 +120,7 @@ function SideNode(
 
     const contW = (data as any)?.containerW as number | undefined
     const contH = (data as any)?.containerH as number | undefined
-    const headerH = 28
+    const headerH = 22
 
     return (
         <div
@@ -128,66 +136,70 @@ function SideNode(
                 width: (data as any)?.expanded && contW ? contW : undefined,
                 height: (data as any)?.expanded && contH ? contH : undefined,
             }}
-        >
+    >
             <Handle type="target" position={Position.Left} className="!w-2 !h-2 !bg-slate-400" />
             {/* expand/collapse removed */}
-            {/* Header/title */}
-            <div className="flex items-center justify-between gap-2 border-b border-gray-200 px-3" style={{ paddingTop: 8, paddingBottom: 8 }}>
-                {isEditing ? (
-                    <textarea
-                        ref={taRef}
-                        className="text-sm bg-white text-gray-900 outline-none border border-gray-300 rounded px-1 py-1 resize-none"
-                        autoFocus
-                        rows={1}
-                        value={value}
-                        onChange={(e) => {
-                            setValue(e.target.value)
-                            const el = taRef.current
-                            if (el) {
-                                el.style.height = 'auto'
-                                el.style.height = `${el.scrollHeight}px`
-                            }
-                            setEditWidth(measureTextWidth(e.target.value))
-                        }}
-                        onFocus={() => {
-                            const el = taRef.current
-                            if (el) {
-                                el.style.height = 'auto'
-                                el.style.height = `${el.scrollHeight}px`
-                            }
-                            setEditWidth(measureTextWidth(value))
-                        }}
-                        onBlur={() => commit(value)}
-                        onKeyDown={(e) => {
-                            if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
-                                e.preventDefault()
-                                commit(value)
-                            }
-                            if (e.key === 'Escape') {
-                                e.preventDefault()
-                                cancel()
-                            }
-                        }}
-                        style={{ width: `${editWidth}px` }}
-                    />
-                ) : (
-                    <div className="text-sm whitespace-pre-wrap leading-snug cursor-pointer" onDoubleClick={requestEdit}>
-                        {data?.label ?? 'Step'}
-                    </div>
-                )}
-        {/* Expand button only for nodes with children */}
-        {(data as any)?.hasChildren ? (
+            {/* Header/title (always non-transparent) */}
+            <div className="relative z-10 flex flex-nowrap items-center gap-2 border-b border-gray-200 px-3 bg-white" style={{ paddingTop: 4, paddingBottom: 4 }}>
+                <div className="min-w-0 flex-1">
+                    {isEditing ? (
+                        <textarea
+                            ref={taRef}
+                            className="w-full text-sm bg-white text-gray-900 outline-none border border-gray-300 rounded px-1 py-1 resize-none"
+                            autoFocus
+                            rows={1}
+                            value={value}
+                            onChange={(e) => {
+                                setValue(e.target.value)
+                                const el = taRef.current
+                                if (el) {
+                                    el.style.height = 'auto'
+                                    el.style.height = `${el.scrollHeight}px`
+                                }
+                                setEditWidth(measureTextWidth(e.target.value))
+                            }}
+                            onFocus={() => {
+                                const el = taRef.current
+                                if (el) {
+                                    el.style.height = 'auto'
+                                    el.style.height = `${el.scrollHeight}px`
+                                }
+                                setEditWidth(measureTextWidth(value))
+                            }}
+                            onBlur={() => commit(value)}
+                            onKeyDown={(e) => {
+                                if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+                                    e.preventDefault()
+                                    commit(value)
+                                }
+                                if (e.key === 'Escape') {
+                                    e.preventDefault()
+                                    cancel()
+                                }
+                            }}
+                            style={{ width: `${editWidth}px`, maxWidth: '100%' }}
+                        />
+                    ) : (
+                        <div className="text-sm whitespace-nowrap overflow-hidden text-ellipsis leading-snug cursor-pointer" onDoubleClick={requestEdit}>
+                            {data?.label ?? 'Step'}
+                        </div>
+                    )}
+                </div>
+                {/* Expand button only for nodes with children */}
+                {(data as any)?.hasChildren ? (
                     <button
                         type="button"
-                        className="ml-2 text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
-            title={(data as any)?.expanded ? 'Collapse' : 'Expand'}
-            onClick={(e) => { e.stopPropagation(); (data as any)?.onToggleExpand?.() }}
+                        className="flex-none ml-2 text-xs px-1.5 py-0.5 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+                        title={(data as any)?.expanded ? 'Collapse' : 'Expand'}
+                        onClick={(e) => { e.stopPropagation(); (data as any)?.onToggleExpand?.() }}
                     >
-            {(data as any)?.expanded ? '▾' : '▸'}
+                        {(data as any)?.expanded ? '▾' : '▸'}
                     </button>
                 ) : null}
             </div>
-            {/* Body area is implicit; children are absolutely positioned within this parent when expanded. */}
+            {/* Body area is implicit; children are absolutely positioned within this parent when expanded.
+                React Flow renders children nodes separately; they sit above this container due to default z-ordering.
+            */}
             <Handle type="source" position={Position.Right} className="!w-2 !h-2 !bg-sky-400" />
         </div>
     )
@@ -315,6 +327,25 @@ function layout(
     cfg: LayoutCfg = { baseX: 120, baseY: 120, colGap: 80, rowPadding: 32 },
     expanded: Set<string> = new Set()
 ) {
+    // Helpers: for collapsed nodes, ignore stale measured container sizes
+    const collapsedWidth = (n: Node) => {
+        const label = ((n.data as any)?.label as string) ?? ''
+        const longestLine = label.split('\n').reduce((m, s) => Math.max(m, s.length), 0)
+        const charW = 7.5
+        const padding = 24
+        const minW = 128
+        return Math.max(minW, Math.ceil(longestLine * charW + padding))
+    }
+    const collapsedHeight = (n: Node) => {
+        const label = ((n.data as any)?.label as string) ?? ''
+        const lines = Math.max(1, label.split('\n').length)
+        const lineH = 18
+        const paddingY = 16
+        const minH = 40
+        return Math.max(minH, lines * lineH + paddingY)
+    }
+    const widthOf = (n: Node) => (expanded.has(n.id) ? estimateNodeWidth(n) : collapsedWidth(n))
+    const heightOf = (n: Node) => (expanded.has(n.id) ? estimateNodeHeight(n) : collapsedHeight(n))
     // Use only edges whose endpoints exist in nodesIn to avoid referencing hidden nodes
     const nodeSet = new Set(nodesIn.map((n) => n.id))
     const safeEdges = edges.filter((e) => nodeSet.has(e.source) && nodeSet.has(e.target))
@@ -335,24 +366,74 @@ function layout(
     // Pre-compute container sizes and child relative positions for expanded parents
     type Cont = { w: number; h: number; childPos: Map<string, { x: number; y: number }>; childIds: Set<string> }
     const container: Map<string, Cont> = new Map()
-    const innerPadX = 16, innerPadY = 12, headerH = 28, rowGapInside = 12
+    const innerPadX = 16, innerPadY = 12, headerH = 22
+    const rowGapInside = cfg.rowPadding
+    const innerColGap = cfg.colGap
     for (const n of nodesIn) {
         if (!expanded.has(n.id)) continue
         const kids = childrenByParent.get(n.id) || []
-        if (!kids.length) continue
+        const kidSet = new Set(kids.map((k) => k.id))
+        const kidEdges = safeEdges.filter((e) => kidSet.has(e.source) && kidSet.has(e.target))
         const sizes = kids.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
-        const maxChildW = Math.max(...sizes.map((s) => s.w))
-        const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
-        const contW = Math.max(estimateNodeWidth(n), maxChildW + innerPadX * 2)
-        const contH = Math.max(estimateNodeHeight(n), headerH + innerPadY + childrenTotalH + innerPadY)
+
+        let contW: number
+        let contH: number
         const childPos = new Map<string, { x: number; y: number }>()
-        let cy = headerH + innerPadY
-        for (const s of sizes) {
-            const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
-            childPos.set(s.id, { x: cx, y: cy })
-            cy += s.h + rowGapInside
-        }
-        container.set(n.id, { w: contW, h: contH, childPos, childIds: new Set(kids.map((k) => k.id)) })
+
+        if (kids.length === 0) {
+            // No children: shrink container to its own node size (header only)
+            contW = estimateNodeWidth(n)
+            contH = estimateNodeHeight(n)
+        } else if (kidEdges.length > 0) {
+            // Hierarchical layout inside the container using internal edges only
+            const levelsKids = computeLevels(kids, kidEdges)
+            const byLevelKids = orderWithinLevels(levelsKids, kids, kidEdges)
+            const levelKeys = Array.from(byLevelKids.keys()).sort((a, b) => a - b)
+            const columnsKids: Node[] [] = levelKeys.map((L) => byLevelKids.get(L) || [])
+            const colW = columnsKids.map((arr) => Math.max(1, ...arr.map((x) => sizes.find((s) => s.id === x.id)!.w)))
+            const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
+            const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
+            const innerH = Math.max(0, ...colH)
+            contW = Math.max(estimateNodeWidth(n), innerPadX * 2 + innerW)
+            // add a rowPadding gap under the header as requested
+            contH = Math.max(estimateNodeHeight(n), headerH + cfg.rowPadding + innerH + innerPadY)
+
+            // Compute x origin per column, centered within available inner width
+            const availableInnerW = Math.max(0, contW - innerPadX * 2)
+            const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
+            const colX: number[] = []
+            let runX = leftPad
+            for (let i = 0; i < columnsKids.length; i++) {
+                colX[i] = runX
+                runX += colW[i] + innerColGap
+            }
+            // Place nodes within columns, vertically centered inside content area
+            for (let i = 0; i < columnsKids.length; i++) {
+                const arr = columnsKids[i]
+                const startY = headerH + cfg.rowPadding + Math.max(0, (innerH - colH[i]) / 2)
+                let y = startY
+                for (const node of arr) {
+                    const s = sizes.find((x) => x.id === node.id)!
+                    const x = colX[i] + Math.max(0, (colW[i] - s.w) / 2)
+                    childPos.set(node.id, { x, y })
+                    y += s.h + rowGapInside
+                }
+            }
+        } else {
+            // Fallback: simple vertical stack centered
+            const maxChildW = Math.max(...sizes.map((s) => s.w))
+            const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
+            contW = Math.max(estimateNodeWidth(n), maxChildW + innerPadX * 2)
+            // add a rowPadding gap under the header for the fallback too
+            contH = Math.max(estimateNodeHeight(n), headerH + cfg.rowPadding + childrenTotalH + innerPadY)
+            let cy = headerH + cfg.rowPadding
+            for (const s of sizes) {
+                const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
+                childPos.set(s.id, { x: cx, y: cy })
+                cy += s.h + rowGapInside
+            }
+    }
+    container.set(n.id, { w: contW, h: contH, childPos, childIds: new Set(kids.map((k) => k.id)) })
     }
 
     // Build columns from level ordering, then remove any contained children of expanded parents from whatever column they appear in
@@ -376,7 +457,7 @@ function layout(
     // Determine max width per produced column
     const colMaxWidth: number[] = columns.map((arr) => Math.max(1, ...arr.map((n) => {
         const cont = container.get(n.id)
-        return cont ? Math.max(estimateNodeWidth(n), cont.w) : estimateNodeWidth(n)
+        return cont ? Math.max(widthOf(n), cont.w) : widthOf(n)
     })))
     // Compute x positions cumulatively
     const colX: number[] = []
@@ -390,17 +471,17 @@ function layout(
     const positioned = nodesIn.map((n) => ({ ...n }))
     const nodeIndex = new Map<string, number>()
     columns.forEach((arr, colIdx) => {
-        const heights = arr.map((n) => estimateNodeHeight(n))
+        const heights = arr.map((n) => heightOf(n))
         const totalHeight = heights.reduce((a, b) => a + b, 0) + Math.max(0, arr.length - 1) * cfg.rowPadding
         let cursorY = cfg.baseY - totalHeight / 2
         const colW = colMaxWidth[colIdx] || 0
         arr.forEach((n, i) => {
             nodeIndex.set(n.id, i)
             const cont = container.get(n.id)
-            const estimatedW = cont ? Math.max(estimateNodeWidth(n), cont.w) : estimateNodeWidth(n)
+            const estimatedW = cont ? Math.max(widthOf(n), cont.w) : widthOf(n)
             const left = (colX[colIdx] || cfg.baseX) + Math.max(0, (colW - estimatedW) / 2)
             const y = cursorY
-            const h = cont ? Math.max(estimateNodeHeight(n), cont.h) : heights[i]
+            const h = cont ? Math.max(heightOf(n), cont.h) : heights[i]
             cursorY += h + cfg.rowPadding
             const idx = positioned.findIndex((p) => p.id === n.id)
             if (idx >= 0) {
@@ -421,9 +502,11 @@ function layout(
     const allContained = new Set<string>()
     container.forEach((c) => c.childIds.forEach((id) => allContained.add(id)))
     for (let i = 0; i < positioned.length; i++) {
-        const p = positioned[i]
-        if (!allContained.has(p.id) && (p as any).parentNode) {
-            const { parentNode, extent, ...rest } = p as any
+        const p = positioned[i] as any
+        // If a node is already marked as a contained child (extent='parent'), keep it contained
+        if (p?.parentNode && p?.extent === 'parent') continue
+        if (!allContained.has(p.id) && p?.parentNode) {
+            const { parentNode, extent, ...rest } = p
             positioned[i] = rest
         }
     }
@@ -493,6 +576,112 @@ function WorkflowInner() {
     // Re-enable auto-layout; it will pause while editing
     const AUTO_LAYOUT = true
 
+    // Restore expanded containers from localStorage (so expansions persist until collapsed)
+    useEffect(() => {
+        try {
+            const raw = localStorage.getItem('workflow.expanded')
+            if (raw) {
+                const arr: string[] = JSON.parse(raw)
+                if (Array.isArray(arr)) setExpandedNodeIds(new Set(arr))
+            }
+        } catch {}
+    }, [])
+
+    // Persist expanded containers
+    useEffect(() => {
+        try {
+            localStorage.setItem('workflow.expanded', JSON.stringify(Array.from(expandedNodeIds)))
+        } catch {}
+    }, [expandedNodeIds])
+
+    // Centralized relayout using current state
+    const relayoutNow = useCallback(() => {
+        if (!AUTO_LAYOUT) return
+        if (editingNodeId || isEditingEdge) return
+        const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+        const useNodes = nodes.filter((n) => visible.has(n.id))
+        const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+        const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
+        const laidMap = new Map(laid.map((n) => [n.id, n]))
+        setNodes((prev) => prev.map((n) => {
+            const laidN = laidMap.get(n.id)
+            const isVisible = visible.has(n.id)
+            // For non-expanded nodes, strip any stale container sizing so width estimates are correct
+            const isExpanded = expandedNodeIds.has(n.id)
+            let nextData: any = (laidN?.data ?? n.data) as any
+            if (!isExpanded && nextData) {
+                const { containerW, containerH, ...rest } = nextData
+                nextData = rest
+            }
+            if (isVisible) {
+                return { ...n, ...(laidN || {}), data: nextData, hidden: false }
+            }
+            return { ...n, hidden: true, parentNode: undefined, extent: undefined as any, data: nextData }
+        }))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: !(visible.has(e.source) && visible.has(e.target)) })))
+    }, [AUTO_LAYOUT, nodes, edges, layoutConfig, expandedNodeIds, editingNodeId, isEditingEdge, setNodes, setEdges])
+
+    // Track nodes under JS-driven tween to disable CSS transitions
+    const animatingIdsRef = useRef<Set<string>>(new Set())
+
+    // Animate nodes to new layout positions so edges move together during interpolation
+    const animateToLayout = useCallback((laid: Node[], duration = 300) => {
+        const idToTarget = new Map<string, { x: number; y: number }>()
+        laid.forEach((n) => idToTarget.set(n.id, { x: n.position.x, y: n.position.y }))
+        const idToStart = new Map<string, { x: number; y: number }>()
+        nodes.forEach((n) => {
+            const t = idToTarget.get(n.id)
+            if (t) idToStart.set(n.id, { x: n.position.x, y: n.position.y })
+        })
+        // Figure which nodes actually move
+        const moving = new Set<string>()
+        idToStart.forEach((s, id) => {
+            const t = idToTarget.get(id)!
+            const dx = t.x - s.x, dy = t.y - s.y
+            if (Math.hypot(dx, dy) > 0.5) moving.add(id)
+        })
+        if (moving.size === 0) {
+            // Nothing moves; just commit final
+            const laidMap = new Map(laid.map((n) => [n.id, n]))
+            setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
+            return
+        }
+        animatingIdsRef.current = moving
+        // Add no-transition class to animated nodes
+        setNodes((prev) => prev.map((n) => (
+            moving.has(n.id)
+                ? { ...n, className: [n.className, 'no-transition'].filter(Boolean).join(' ') }
+                : n
+        )))
+        const easeOut = (t: number) => 1 - (1 - t) * (1 - t)
+        const start = performance.now()
+        const step = (now: number) => {
+            const p = Math.min(1, (now - start) / duration)
+            const e = easeOut(p)
+            setNodes((prev) => prev.map((n) => {
+                const s = idToStart.get(n.id)
+                const t = idToTarget.get(n.id)
+                if (!s || !t) return n
+                const nx = s.x + (t.x - s.x) * e
+                const ny = s.y + (t.y - s.y) * e
+                return { ...n, position: { x: nx, y: ny }, hidden: false }
+            }))
+            if (p < 1) requestAnimationFrame(step)
+            else {
+                // Commit the full laid nodes (includes container sizing, parentNode, etc.) and remove no-transition
+                const laidMap = new Map(laid.map((n) => [n.id, n]))
+                setNodes((prev) => prev.map((n) => {
+                    const l = laidMap.get(n.id)
+                    if (!l) return n
+                    const cls = (n.className || '').split(' ').filter((c) => c && c !== 'no-transition').join(' ')
+                    return { ...n, ...l, className: cls, hidden: false }
+                }))
+                animatingIdsRef.current = new Set()
+            }
+        }
+        requestAnimationFrame(step)
+    }, [nodes, setNodes])
+
     // ID helpers (UUID v4)
     const generateUuid = () =>
         (globalThis as any).crypto?.randomUUID?.() ||
@@ -558,11 +747,17 @@ function WorkflowInner() {
             // Only keep edges whose endpoints are present in the fetched nodes
             const nodeIdSet = new Set(rfNodes.map((n) => n.id))
             const rfEdges: Edge[] = rfEdgesAll.filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
-            // Layout all nodes and show all edges (no parents expanded initially)
-            const { nodes: laid } = layout(rfNodes, rfEdges, layoutConfig, expandedNodeIds)
+            // Layout only visible nodes (respect expanded containers) and hide others
+            const visible = computeVisibleNodeIds(rfNodes, expandedNodeIds)
+            const rfNodesForLayout = rfNodes.filter((n) => visible.has(n.id))
+            const rfEdgesForLayout = rfEdges.filter((e) => visible.has(e.source) && visible.has(e.target))
+            const { nodes: laid } = layout(rfNodesForLayout, rfEdgesForLayout, layoutConfig, expandedNodeIds)
             const laidMap = new Map(laid.map((n) => [n.id, n]))
-            const nextNodes = rfNodes.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false }))
-            const nextEdges = rfEdges.map((e) => ({ ...e, hidden: false }))
+            const nextNodes = rfNodes.map((n) => {
+                if (!visible.has(n.id)) return { ...n, hidden: true, parentNode: undefined, extent: undefined as any }
+                return { ...n, ...(laidMap.get(n.id) || {}), hidden: false }
+            })
+            const nextEdges = rfEdges.map((e) => ({ ...e, hidden: !(visible.has(e.source) && visible.has(e.target)) }))
             setNodes(nextNodes)
             setEdges(nextEdges)
             // refresh snapshot
@@ -582,7 +777,7 @@ function WorkflowInner() {
         } finally {
             setLoading(false)
         }
-    }, [selectedOrgId, setNodes, setEdges, layoutConfig, expandedNodeIds])
+    }, [selectedOrgId])
 
     useEffect(() => {
         void load()
@@ -603,29 +798,71 @@ function WorkflowInner() {
         // compute layout only when structure changes AND nothing is being edited
         if (!AUTO_LAYOUT) return
         if (editingNodeId || isEditingEdge) return // skip layout while editing
-    const { nodes: laid } = layout(nodes, edges, layoutConfig, expandedNodeIds)
+        const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+        const useNodes = nodes.filter((n) => visible.has(n.id))
+        const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+        const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
         const laidMap = new Map(laid.map((n) => [n.id, n]))
-        setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
-        setEdges((prev) => prev.map((e) => ({ ...e, hidden: false })))
+        setNodes((prev) => prev.map((n) => {
+            const laidN = laidMap.get(n.id)
+            const isVisible = visible.has(n.id)
+            const isExpanded = expandedNodeIds.has(n.id)
+            let nextData: any = (laidN?.data ?? n.data) as any
+            if (!isExpanded && nextData) {
+                const { containerW, containerH, ...rest } = nextData
+                nextData = rest
+            }
+            if (isVisible) return { ...n, ...(laidN || {}), data: nextData, hidden: false }
+            return { ...n, hidden: true, parentNode: undefined, extent: undefined as any, data: nextData }
+        }))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: !(visible.has(e.source) && visible.has(e.target)) })))
     }, [structureKey, editingNodeId, isEditingEdge, layoutConfig, expandedNodeIds])
 
     useEffect(() => {
         // Re-run layout once widths are known
         if (!AUTO_LAYOUT) return
         if (editingNodeId || isEditingEdge) return
-    const { nodes: laid } = layout(nodes, edges, layoutConfig, expandedNodeIds)
+        const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+        const useNodes = nodes.filter((n) => visible.has(n.id))
+        const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+        const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
         const laidMap = new Map(laid.map((n) => [n.id, n]))
-        setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
-        setEdges((prev) => prev.map((e) => ({ ...e, hidden: false })))
+        setNodes((prev) => prev.map((n) => {
+            const laidN = laidMap.get(n.id)
+            const isVisible = visible.has(n.id)
+            const isExpanded = expandedNodeIds.has(n.id)
+            let nextData: any = (laidN?.data ?? n.data) as any
+            if (!isExpanded && nextData) {
+                const { containerW, containerH, ...rest } = nextData
+                nextData = rest
+            }
+            if (isVisible) return { ...n, ...(laidN || {}), data: nextData, hidden: false }
+            return { ...n, hidden: true, parentNode: undefined, extent: undefined as any, data: nextData }
+        }))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: !(visible.has(e.source) && visible.has(e.target)) })))
     }, [widthKey, editingNodeId, isEditingEdge, layoutConfig, expandedNodeIds])
 
     useEffect(() => {
         if (!AUTO_LAYOUT) return
         if (editingNodeId || isEditingEdge) return
-    const { nodes: laid } = layout(nodes, edges, layoutConfig, expandedNodeIds)
+        const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+        const useNodes = nodes.filter((n) => visible.has(n.id))
+        const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+        const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
         const laidMap = new Map(laid.map((n) => [n.id, n]))
-        setNodes((prev) => prev.map((n) => ({ ...n, ...(laidMap.get(n.id) || {}), hidden: false })))
-        setEdges((prev) => prev.map((e) => ({ ...e, hidden: false })))
+        setNodes((prev) => prev.map((n) => {
+            const laidN = laidMap.get(n.id)
+            const isVisible = visible.has(n.id)
+            const isExpanded = expandedNodeIds.has(n.id)
+            let nextData: any = (laidN?.data ?? n.data) as any
+            if (!isExpanded && nextData) {
+                const { containerW, containerH, ...rest } = nextData
+                nextData = rest
+            }
+            if (isVisible) return { ...n, ...(laidN || {}), data: nextData, hidden: false }
+            return { ...n, hidden: true, parentNode: undefined, extent: undefined as any, data: nextData }
+        }))
+        setEdges((prev) => prev.map((e) => ({ ...e, hidden: !(visible.has(e.source) && visible.has(e.target)) })))
     }, [heightKey, editingNodeId, isEditingEdge, layoutConfig, expandedNodeIds])
 
     // Listen for inline node label update events from custom nodes
@@ -643,13 +880,21 @@ function WorkflowInner() {
             setEditingNodeId(detail.nodeId) // track which node is being edited
         }
 
+        const handleEndEdit = (e: Event) => {
+            const detail = (e as CustomEvent).detail as { nodeId: string }
+            if (!detail?.nodeId) return
+            if (editingNodeId === detail.nodeId) setEditingNodeId(null)
+        }
+
         window.addEventListener('updateNodeLabel', handleUpdate as any)
         window.addEventListener('startNodeEdit', handleStartEdit as any)
+        window.addEventListener('endNodeEdit', handleEndEdit as any)
         return () => {
             window.removeEventListener('updateNodeLabel', handleUpdate as any)
             window.removeEventListener('startNodeEdit', handleStartEdit as any)
+            window.removeEventListener('endNodeEdit', handleEndEdit as any)
         }
-    }, [setNodes])
+    }, [setNodes, editingNodeId])
 
     // Double click node to trigger inline editing
     const onNodeDoubleClick = useCallback((_: any, node: Node) => {
@@ -674,12 +919,32 @@ function WorkflowInner() {
     }, [])
 
     const viewEdges = useMemo(() => {
-        return edges.map((e) => ({
-            ...e,
-            type: 'editableLabel',
-            data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu },
-        })) as Edge[]
-    }, [edges, onEdgeLabelCommit, onEdgeEditingChange, onOpenEdgeMenu])
+        // Determine if a container is selected; if so, hide all edges except:
+        // 1) edges connected directly to the selected container
+        // 2) edges fully internal to that container (between its children)
+        const selectedContainerId = nodes.find((n) => n.selected && expandedNodeIds.has(n.id))?.id || null
+        const insideSelected = new Set<string>()
+        if (selectedContainerId) {
+            nodes.forEach((n) => {
+                const pid = (n.data as any)?.parentId as string | null | undefined
+                if (pid === selectedContainerId || n.id === selectedContainerId) insideSelected.add(n.id)
+            })
+        }
+        return edges.map((e) => {
+            const base: Edge = {
+                ...e,
+                type: 'editableLabel',
+                data: { ...(e as any).data, label: (e as any).data?.label ?? (e as any).label ?? '', onLabelCommit: onEdgeLabelCommit, onEditingChange: onEdgeEditingChange, onOpenContextMenu: onOpenEdgeMenu },
+            }
+            if (!selectedContainerId) return base
+            const sIn = insideSelected.has(e.source)
+            const tIn = insideSelected.has(e.target)
+            const isConnectedToContainer = e.source === selectedContainerId || e.target === selectedContainerId
+            const isInternal = sIn && tIn
+            const visible = isConnectedToContainer || isInternal
+            return { ...base, hidden: !visible }
+        }) as Edge[]
+    }, [edges, nodes, expandedNodeIds, onEdgeLabelCommit, onEdgeEditingChange, onOpenEdgeMenu])
 
     // Handle delete key for selected nodes/edges
     useEffect(() => {
@@ -731,11 +996,20 @@ function WorkflowInner() {
             }
             setEdges((eds) => {
                 const edgeId = generateUuid()
-                return addEdge({ id: edgeId, ...connection, type: 'editableLabel', data: { label: '' } } as any, eds)
+                const next = addEdge({ id: edgeId, ...connection, type: 'editableLabel', data: { label: '' } } as any, eds)
+                return next
             })
             setDidConnect(true)
+            // animate to new layout shortly after to reflect new edge
+            setTimeout(() => {
+                const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+                const useNodes = nodes.filter((n) => visible.has(n.id))
+                const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+                const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
+                animateToLayout(laid, 220)
+            }, 0)
         },
-        [setEdges, nodes, edges]
+        [setEdges, nodes, edges, layoutConfig, expandedNodeIds, animateToLayout]
     )
 
     // If connection ended on empty pane, create a new node and connect to it
@@ -756,20 +1030,35 @@ function WorkflowInner() {
             const clientX = isTouch ? (event as any).changedTouches[0].clientX : (event as any).clientX
             const clientY = isTouch ? (event as any).changedTouches[0].clientY : (event as any).clientY
             const pos = rf.screenToFlowPosition({ x: clientX, y: clientY })
+            // Determine the parent process for the new subprocess: if the source is inside a container,
+            // use its parent process; otherwise use the source itself (creating a child of a root)
+            const srcNode = connectingFromId ? rf.getNode(connectingFromId) : null
+            const parentPid = (srcNode?.data as any)?.parentId ?? srcNode?.id ?? connectingFromId
             const newId = generateUuid()
             const newNode: Node = {
                 id: newId,
                 type: 'side',
-                data: { label: 'New Step' },
+                // Make this a child subprocess of the parent process
+                data: { label: 'New Step', parentId: parentPid },
                 position: pos,
             }
             const newEdge: Edge = { id: generateUuid(), source: connectingFromId, target: newId, type: 'editableLabel', data: { label: '' } } as any
             setNodes((nds) => nds.concat(newNode))
             setEdges((eds) => eds.concat(newEdge))
+            // Fit the view to the parent group's region
+            setTimeout(() => {
+                try {
+                    const all = rf.getNodes()
+                    const group = all.filter((n) => n.id === parentPid || (n.data as any)?.parentId === parentPid)
+                    if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
+                } catch {}
+                const { nodes: laid } = layout(rf.getNodes(), rf.getEdges(), layoutConfig, expandedNodeIds)
+                animateToLayout(laid, 260)
+            }, 0)
             setConnectingFromId(null)
             setDidConnect(false)
         },
-        [connectingFromId, didConnect, rf, setNodes, setEdges]
+        [connectingFromId, didConnect, rf, setNodes, setEdges, layoutConfig, expandedNodeIds, animateToLayout]
     )
 
     // removed addChild function per request
@@ -956,12 +1245,37 @@ function WorkflowInner() {
 
     // Toggle expand and lazy-load children for that parent
     const toggleExpand = useCallback(async (nodeId: string) => {
-        setExpandedNodeIds((prev) => {
-            const next = new Set(prev)
-            if (next.has(nodeId)) next.delete(nodeId)
-            else next.add(nodeId)
-            return next
-        })
+        // Determine if this action is a collapse or expand
+        const wasExpanded = expandedNodeIds.has(nodeId)
+        const nextExpanded = new Set(expandedNodeIds)
+        if (wasExpanded) nextExpanded.delete(nodeId)
+        else nextExpanded.add(nodeId)
+        setExpandedNodeIds(nextExpanded)
+
+        // If collapsing: strip container sizing immediately and animate to new layout
+        if (wasExpanded) {
+            // Remove containerW/H so parent shrinks back to its intrinsic size
+            setNodes((nds) => nds.map((n) => {
+                if (n.id !== nodeId) return n
+                const d: any = n.data || {}
+                const { containerW, containerH, ...rest } = d
+                return { ...n, data: rest }
+            }))
+            // Compute visibility and animate to new layout using the next expanded set.
+            // Important: sanitize nodes for layout so collapsed nodes do not keep stale container sizes.
+            const sanitized = nodes.map((n) => {
+                if (nextExpanded.has(n.id)) return n
+                const d: any = n.data || {}
+                const { containerW, containerH, ...rest } = d
+                return { ...n, data: rest }
+            })
+            const visible = computeVisibleNodeIds(sanitized, nextExpanded)
+            const useNodes = sanitized.filter((n) => visible.has(n.id))
+            const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+            const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, nextExpanded)
+            animateToLayout(laid, 260)
+            return
+        }
 
         // If expanding and children are not in state yet, fetch direct children and any edges among them
         const parentInState = nodes.find((n) => n.id === nodeId)
@@ -997,34 +1311,9 @@ function WorkflowInner() {
                 childNodesRaw.forEach((n) => ((n.data as any).hasChildren = hasChildSet.has(n.id)))
             }
 
-            // Compute immediate container sizing and child positions to avoid any flash outside
-            const parentNode = nodes.find((n) => n.id === nodeId)
-            const innerPadX = 16, innerPadY = 12, headerH = 28, rowGapInside = 12
-            const sizes = childNodesRaw.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
-            const maxChildW = sizes.length ? Math.max(...sizes.map((s) => s.w)) : 0
-            const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
-            const baseParentW = parentNode ? estimateNodeWidth(parentNode) : 160
-            const baseParentH = parentNode ? estimateNodeHeight(parentNode) : 48
-            const contW = Math.max(baseParentW, maxChildW + innerPadX * 2)
-            const contH = Math.max(baseParentH, headerH + innerPadY + childrenTotalH + innerPadY)
-            // Assign child relative positions inside the container now
-            let cy = headerH + innerPadY
-            const childNodes: Node[] = childNodesRaw.map((c) => {
-                const s = sizes.find((x) => x.id === c.id)!
-                const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
-                const node: Node = {
-                    ...c,
-                    position: { x: cx, y: cy },
-                    parentNode: nodeId,
-                    extent: 'parent' as any,
-                }
-                cy += s.h + rowGapInside
-                return node
-            })
-
-            // Fetch edges whose endpoints are in the union of existing nodes + new child nodes
+            // Fetch edges whose endpoints are in the union of existing nodes + new child nodes (for rendering)
             const currentIds = new Set(nodes.map((n) => n.id))
-            const allIds = [...new Set([...Array.from(currentIds), ...childNodes.map((n) => n.id)])]
+            const allIds = [...new Set([...Array.from(currentIds), ...childNodesRaw.map((n) => n.id)])]
             let newEdges: Edge[] = []
             if (allIds.length) {
                 const { data: edgeRows, error: eErr } = await supabase
@@ -1043,31 +1332,143 @@ function WorkflowInner() {
                 }))
             }
 
-            // Merge new children and edges, avoiding duplicates; also pre-set parent container size immediately
+            // Compute immediate container sizing and child positions using internal edges (if any) to reduce jumps
+            const parentNode = nodes.find((n) => n.id === nodeId)
+            const innerPadX = 16, innerPadY = 12, headerH = 22
+            const rowGapInside = layoutConfig.rowPadding
+            const innerColGap = layoutConfig.colGap
+            const sizes = childNodesRaw.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
+            const childIdSet = new Set(childNodesRaw.map((n) => n.id))
+            const internalEdges = newEdges.filter((e) => childIdSet.has(e.source) && childIdSet.has(e.target))
+
+            let contW = parentNode ? estimateNodeWidth(parentNode) : 160
+            let contH = parentNode ? estimateNodeHeight(parentNode) : 48
+            let childNodes: Node[] = []
+
+            if (internalEdges.length > 0) {
+                // Hierarchical inside container
+                const levelsKids = computeLevels(childNodesRaw, internalEdges)
+                const byLevelKids = orderWithinLevels(levelsKids, childNodesRaw, internalEdges)
+                const levelKeys = Array.from(byLevelKids.keys()).sort((a, b) => a - b)
+                const columnsKids: Node[][] = levelKeys.map((L) => byLevelKids.get(L) || [])
+                const colW = columnsKids.map((arr) => Math.max(1, ...arr.map((x) => sizes.find((s) => s.id === x.id)!.w)))
+                const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
+                const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
+                const innerH = Math.max(0, ...colH)
+                contW = Math.max(contW, innerPadX * 2 + innerW)
+                // Add rowPadding gap under the header during expand pre-sizing
+                contH = Math.max(contH, headerH + layoutConfig.rowPadding + innerH + innerPadY)
+                // x per column
+                const colX: number[] = []
+                let runX = innerPadX
+                for (let i = 0; i < columnsKids.length; i++) { colX[i] = runX; runX += colW[i] + innerColGap }
+                // place nodes
+                const childPos = new Map<string, { x: number; y: number }>()
+                for (let i = 0; i < columnsKids.length; i++) {
+                    const arr = columnsKids[i]
+                    let y = headerH + layoutConfig.rowPadding
+                    for (const node of arr) {
+                        const s = sizes.find((x) => x.id === node.id)!
+                        const x = colX[i] + Math.max(0, (colW[i] - s.w) / 2)
+                        childPos.set(node.id, { x, y })
+                        y += s.h + rowGapInside
+                    }
+                }
+                childNodes = childNodesRaw.map((c) => ({ ...c, position: childPos.get(c.id)!, parentNode: nodeId, extent: 'parent' as any }))
+            } else {
+                // Vertical fallback
+                const maxChildW = sizes.length ? Math.max(...sizes.map((s) => s.w)) : 0
+                const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
+                contW = Math.max(contW, maxChildW + innerPadX * 2)
+                contH = Math.max(contH, headerH + layoutConfig.rowPadding + childrenTotalH + innerPadY)
+                let cy = headerH + layoutConfig.rowPadding
+                childNodes = childNodesRaw.map((c) => {
+                    const s = sizes.find((x) => x.id === c.id)!
+                    const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
+                    const node: Node = { ...c, position: { x: cx, y: cy }, parentNode: nodeId, extent: 'parent' as any }
+                    cy += s.h + rowGapInside
+                    return node
+                })
+            }
+
+            // 1) Set parent size first so React Flow measures container correctly
+            setNodes((nds) => nds.map((n) => (
+                n.id === nodeId ? { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } } : n
+            )))
+            // Wait one frame to allow measurement
+            await new Promise((r) => requestAnimationFrame(() => r(null)))
+            // 2) Insert children (already positioned relative) and edges
             setNodes((nds) => {
                 const exist = new Set(nds.map((n) => n.id))
-                const withChildren = nds.concat(childNodes.filter((n) => !exist.has(n.id)))
-                return withChildren.map((n) => (
-                    n.id === nodeId
-                        ? { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } }
-                        : n
-                ))
+                return nds.concat(childNodes.filter((n) => !exist.has(n.id)))
             })
             setEdges((eds) => {
                 const exist = new Set(eds.map((e) => e.id))
+                // Only add fetched edges; no virtual edges are generated
                 return eds.concat(newEdges.filter((e) => !exist.has(e.id)))
             })
+            // Fit view to the group (parent + its children)
+            try {
+                const all = rf.getNodes()
+                const group = all.filter((n) => n.id === nodeId || (n.data as any)?.parentId === nodeId)
+                if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
+            } catch {}
+            // Animate to final layout after insertion (expand). Use up-to-date expanded set.
+            {
+                // Sanitize for layout: only expanded nodes should have container sizes considered.
+                const current = rf.getNodes().map((n) => {
+                    if (nextExpanded.has(n.id)) return n
+                    const d: any = n.data || {}
+                    const { containerW, containerH, ...rest } = d
+                    return { ...n, data: rest }
+                })
+                const visible = computeVisibleNodeIds(current, nextExpanded)
+                const useNodes = current.filter((n) => visible.has(n.id))
+                const useEdges = rf.getEdges().filter((e) => visible.has(e.source) && visible.has(e.target))
+                const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, nextExpanded)
+                animateToLayout(laid, 260)
+            }
         } catch (err) {
             console.error('Expand load failed', err)
         }
-    }, [nodes, selectedOrgId, setNodes, setEdges])
+    }, [nodes, edges, selectedOrgId, setNodes, setEdges, rf, layoutConfig, expandedNodeIds, animateToLayout])
 
     const viewNodes = useMemo(() => {
+        const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
         const expanded = expandedNodeIds
-        return nodes.map((n) => ({
-            ...n,
-            data: { ...(n.data as any), expanded: expanded.has(n.id), onToggleExpand: () => toggleExpand(n.id) },
-        }))
+        // Build quick lookup of parent->children
+        const childrenByParent = new Map<string, string[]>()
+        nodes.forEach((n) => {
+            const pid = (n.data as any)?.parentId as string | null | undefined
+            if (!pid) return
+            if (!childrenByParent.has(pid)) childrenByParent.set(pid, [])
+            childrenByParent.get(pid)!.push(n.id)
+        })
+        const contained = new Set<string>()
+        expanded.forEach((pid) => (childrenByParent.get(pid) || []).forEach((id) => contained.add(id)))
+        return nodes.map((n) => {
+            const isContainer = expanded.has(n.id)
+            const isChildOfExpanded = contained.has(n.id)
+            const common = {
+                hidden: !visible.has(n.id),
+            }
+            if (!visible.has(n.id)) {
+                return {
+                    ...n,
+                    ...common,
+                    parentNode: undefined,
+                    extent: undefined as any,
+                    data: { ...(n.data as any), expanded: isContainer, onToggleExpand: () => toggleExpand(n.id) },
+                }
+            }
+            return {
+                ...n,
+                ...common,
+                parentNode: isChildOfExpanded ? (n.data as any)?.parentId : n.parentNode,
+                extent: isChildOfExpanded ? ('parent' as any) : n.extent,
+                data: { ...(n.data as any), expanded: isContainer, onToggleExpand: () => toggleExpand(n.id) },
+            }
+        })
     }, [nodes, expandedNodeIds, toggleExpand])
 
     return (
@@ -1135,8 +1536,28 @@ function WorkflowInner() {
                         <ReactFlow
                             nodes={viewNodes}
                             edges={viewEdges}
-                            onNodesChange={onNodesChange}
-                            onEdgesChange={onEdgesChange}
+                            onNodesChange={(changes) => {
+                                onNodesChange(changes)
+                                if (changes.some((c: any) => c.type === 'position' && c.dragging === false)) {
+                                    setTimeout(() => {
+                                        const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+                                        const useNodes = nodes.filter((n) => visible.has(n.id))
+                                        const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+                                        const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
+                                        animateToLayout(laid, 280)
+                                    }, 0)
+                                }
+                            }}
+                            onEdgesChange={(changes) => {
+                                onEdgesChange(changes)
+                                if (changes.length) {
+                                    const visible = computeVisibleNodeIds(nodes, expandedNodeIds)
+                                    const useNodes = nodes.filter((n) => visible.has(n.id))
+                                    const useEdges = edges.filter((e) => visible.has(e.source) && visible.has(e.target))
+                                    const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, expandedNodeIds)
+                                    animateToLayout(laid, 220)
+                                }
+                            }}
                             onNodeDoubleClick={onNodeDoubleClick}
                             onNodeContextMenu={onNodeContextMenu}
                             onConnectStart={onConnectStart}
