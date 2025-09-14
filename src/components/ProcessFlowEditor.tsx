@@ -396,6 +396,8 @@ const ProcessFlowEditorInner = React.forwardRef<
     const [organisationId] = useState<string>(selectedOrgId || 'c6b0261b-690f-4c43-9b79-3426a7b97804') // Use actual org or fallback
     // Recompute parent node sizes and positions based on child bounds (all sides)
     const recomputeParentSizes = useCallback((currentNodes: Node[]): Node[] => {
+        const EPS = 0.5
+        const round = (v: number) => Math.round(v)
         // Padding config
         const PADDING_RIGHT = groupPadding.x
         const PADDING_BOTTOM = groupPadding.y
@@ -457,8 +459,10 @@ const ProcessFlowEditorInner = React.forwardRef<
             const baseHeight = Math.max(300, maxY + PADDING_BOTTOM)
 
             // Left/top delta so that minX -> PADDING_LEFT and minY -> HEADER_TOP
-            const dxLeftDelta = PADDING_LEFT - minX // positive => expand left, negative => shrink left
-            const dyTopDelta = HEADER_TOP - minY // positive => expand top, negative => shrink top
+            let dxLeftDelta = PADDING_LEFT - minX // positive => expand left, negative => shrink left
+            let dyTopDelta = HEADER_TOP - minY // positive => expand top, negative => shrink top
+            if (Math.abs(dxLeftDelta) < EPS) dxLeftDelta = 0
+            if (Math.abs(dyTopDelta) < EPS) dyTopDelta = 0
 
             const desiredWidth = Math.max(420, baseWidth + dxLeftDelta)
             const desiredHeight = Math.max(300, baseHeight + dyTopDelta)
@@ -479,9 +483,9 @@ const ProcessFlowEditorInner = React.forwardRef<
             const adj = adjustByParent[node.id]
             if (adj) {
                 const curSize = (node as any).data?.stepData?.metadata?.size || {}
-                const nextWidth = adj.desiredWidth
-                const nextHeight = adj.desiredHeight
-                const nextPos = { x: node.position.x + adj.parentDeltaX, y: node.position.y + adj.parentDeltaY }
+                const nextWidth = round(adj.desiredWidth)
+                const nextHeight = round(adj.desiredHeight)
+                const nextPos = { x: round(node.position.x + adj.parentDeltaX), y: round(node.position.y + adj.parentDeltaY) }
 
                 const sizeUnchanged = (curSize.width || 0) === nextWidth && (curSize.height || 0) === nextHeight
                 const posUnchanged = node.position.x === nextPos.x && node.position.y === nextPos.y
@@ -504,7 +508,7 @@ const ProcessFlowEditorInner = React.forwardRef<
             // If this node is a child, shift by its parent's child delta
             if (node.parentNode && adjustByParent[node.parentNode]) {
                 const padj = adjustByParent[node.parentNode]
-                const nextPos = { x: node.position.x + padj.childDeltaX, y: node.position.y + padj.childDeltaY }
+                const nextPos = { x: round(node.position.x + padj.childDeltaX), y: round(node.position.y + padj.childDeltaY) }
                 const posUnchanged = node.position.x === nextPos.x && node.position.y === nextPos.y
                 if (posUnchanged) return node
 
@@ -526,9 +530,22 @@ const ProcessFlowEditorInner = React.forwardRef<
         })
     }, [groupPadding])
 
-        // Effect: whenever nodes change, recompute parent sizes/positions and update only when needed
+        // Effect: whenever nodes change, recompute parent sizes/positions and update only when needed.
+        // Includes an additional signature guard to avoid update loops when values are effectively unchanged.
         useEffect(() => {
             const updated = recomputeParentSizes(nodes)
+
+            // Order-independent signature of relevant layout fields
+            const makeSig = (arr: Node[]) => arr
+                .slice()
+                .sort((a, b) => a.id.localeCompare(b.id))
+                .map(n => `${n.id}:${n.position.x},${n.position.y}:${(n as any).style?.width ?? ''}x${(n as any).style?.height ?? ''}`)
+                .join('|')
+
+            const curSig = makeSig(nodes)
+            const newSig = makeSig(updated)
+            if (newSig === curSig) return
+
             // Detect meaningful changes (position/width/height/metadata.size)
             let changed = false
             if (updated.length !== nodes.length) {
@@ -802,7 +819,8 @@ const ProcessFlowEditorInner = React.forwardRef<
         const sourceIsChild = !!node?.parentNode
         const handleId = (params as any).handleId
         const isLeftHandle = handleId === 'left-source'
-        setConnectingFromLeft(Boolean(isParentLeftSource || (isLeftHandle && !sourceIsChild)))
+        // Allow left-handle creation for both parents and children (children will create grandchildren)
+        setConnectingFromLeft(Boolean(isParentLeftSource || isLeftHandle))
         // Detect child right handle start using handleId
         const isRightHandle = (params as any).handleId === 'right-source'
         setConnectingFromChildRight(Boolean(sourceIsChild && isRightHandle))
@@ -837,9 +855,11 @@ const ProcessFlowEditorInner = React.forwardRef<
                 // Determine if we should create a child or a sibling
                 const sourceIsChild = nodes.find(n => n.id === connectingNodeId)?.parentNode
                 if (connectingFromLeft) {
-                    // Create sub-process under the top-most parent (if child, use its parent; else use itself)
-                    const parentId = sourceIsChild || connectingNodeId
-                    createSubProcess(parentId, flowPosition, { createParentEdge: true })
+                    // Create sub-process: if source is a child, create under the child (grandchild);
+                    // otherwise create under the top-level parent itself.
+                    const sourceNode = nodes.find(n => n.id === connectingNodeId)
+                    const parentId = sourceNode?.parentNode ? connectingNodeId : (sourceIsChild || connectingNodeId)
+                    createSubProcess(parentId!, flowPosition, { createParentEdge: true })
                 } else if (connectingFromChildRight && sourceIsChild) {
                     // From child right handle: create a sibling sub-process under same parent and connect child -> new child
                     const parentId = sourceIsChild
@@ -1078,132 +1098,146 @@ const ProcessFlowEditorInner = React.forwardRef<
         steps: ProcessStepData[],
         edgeData: ProcessFlowEdgeData[] = []
     ): { nodes: Node[]; edges: Edge[] } => {
-        // Separate parent nodes and sub-processes
-        const parentSteps = steps.filter(step => !step.parent_step_id)
-        const subProcessSteps = steps.filter(step => step.parent_step_id)
-        
-        // Check which parent steps have sub-processes
-        const parentsWithSubProcesses = parentSteps.map(step => ({
-            ...step,
-            metadata: {
-                ...step.metadata,
-                hasSubProcesses: subProcessSteps.some(sub => sub.parent_step_id === step.id)
+        if (!steps?.length) return { nodes: [], edges: [] }
+
+        // Index steps and build parent->children map
+        const stepById = new Map<string, ProcessStepData>()
+        const childrenByParent = new Map<string, ProcessStepData[]>()
+        steps.forEach(s => {
+            stepById.set(s.id, s)
+            if (s.parent_step_id) {
+                const arr = childrenByParent.get(s.parent_step_id) || []
+                arr.push(s)
+                childrenByParent.set(s.parent_step_id, arr)
             }
-        }))
-
-        // Create parent nodes
-    const reactFlowNodes: Node[] = parentsWithSubProcesses.map((step, index) => ({
-            id: step.id,
-            type: 'processStep',
-            position: {
-                x: (step.metadata?.position?.x) || (index % 3) * 450 + 100,
-                y: (step.metadata?.position?.y) || Math.floor(index / 3) * 320 + 100,
-            },
-            // Parent containers should not intercept pointer events so edges are clickable
-            style: step.metadata?.hasSubProcesses ? { pointerEvents: 'none' } : undefined,
-            draggable: true,
-            selectable: step.metadata?.hasSubProcesses ? false : true,
-            dragHandle: step.metadata?.hasSubProcesses ? '.rf-drag-handle' : undefined,
-            // leave pointer events enabled on RF node wrapper for selection
-            data: {
-                label: step.name,
-                description: step.description,
-        stepData: step
-            },
-        }))
-
-        // Parent nodes have no manual resize; size auto-wraps children.
-        const parentNodesWithData = reactFlowNodes.map(n => ({
-            ...n,
-            data: {
-                ...n.data,
-            },
-        }))
-        // Build a quick map of parent sizes
-        const parentSizeMap = new Map<string, { width: number; height: number }>()
-        parentsWithSubProcesses.forEach(p => {
-            const sz = p.metadata?.size || { width: 420, height: 300 }
-            parentSizeMap.set(p.id, sz)
         })
 
-        // Guard: filter out sub-processes whose parent is missing (avoid RF runtime error)
-        const validSubProcessSteps = subProcessSteps.filter(s => s.parent_step_id && parentSizeMap.has(s.parent_step_id))
-        const orphanSubSteps = subProcessSteps.filter(s => !s.parent_step_id || !parentSizeMap.has(s.parent_step_id))
-        if (orphanSubSteps.length) {
-            console.warn('Ignoring orphan sub-process steps (missing parent):', orphanSubSteps.map(o => o.id))
+        // Compute hasSubProcesses on all steps based on real children
+        const enrichedSteps = steps.map(s => ({
+            ...s,
+            metadata: { ...(s.metadata || {}), hasSubProcesses: (childrenByParent.get(s.id)?.length || 0) > 0 }
+        }))
+
+        // Depth computation for ordering (parents before their descendants)
+        const depthCache = new Map<string, number>()
+        const getDepth = (id: string): number => {
+            if (depthCache.has(id)) return depthCache.get(id)!
+            const s = stepById.get(id)
+            const d = s?.parent_step_id ? 1 + getDepth(s.parent_step_id) : 0
+            depthCache.set(id, d)
+            return d
         }
 
-        // Clamp child positions to be within parent content area
-        const childNodes: Node[] = validSubProcessSteps.map(s => {
-            const parentId = s.parent_step_id!
-            const size = parentSizeMap.get(parentId) || { width: 420, height: 300 }
-            const margin = groupPadding.x
-            const header = groupPadding.header
-            const childW = 150
-            const childH = 60
-            const p = s.metadata?.position || { x: margin, y: header }
-            const x = Math.max(margin, Math.min(p.x, size.width - childW - margin))
-            const y = Math.max(header, Math.min(p.y, size.height - childH - margin))
-            return {
+        const withDepth = enrichedSteps.map(s => ({ s, depth: getDepth(s.id) }))
+        withDepth.sort((a, b) => a.depth - b.depth)
+
+        // Build a size map for any step that has children (container size)
+        const sizeById = new Map<string, { width: number; height: number }>()
+        enrichedSteps.forEach(s => {
+            if ((s.metadata as any)?.hasSubProcesses) {
+                const sz = (s.metadata as any)?.size || { width: 420, height: 300 }
+                sizeById.set(s.id, sz)
+            }
+        })
+
+        const reactFlowNodes: Node[] = []
+        const topLevel = withDepth.filter(x => !x.s.parent_step_id)
+
+        // Create nodes for all steps, parents first by depth
+        withDepth.forEach(({ s, depth }, indexAtDepth) => {
+            // Guard: skip if parent missing
+            if (s.parent_step_id && !stepById.has(s.parent_step_id)) return
+
+            const isContainer = !!(s.metadata as any)?.hasSubProcesses
+            const isTop = !s.parent_step_id
+
+            // Positioning
+            let position = { x: 0, y: 0 }
+            if (isTop) {
+                // Use saved absolute position or lay out in a loose grid
+                const gridIndex = topLevel.findIndex(t => t.s.id === s.id)
+                position = {
+                    x: (s.metadata as any)?.position?.x ?? ((gridIndex % 3) * 450 + 100),
+                    y: (s.metadata as any)?.position?.y ?? (Math.floor(gridIndex / 3) * 320 + 100),
+                }
+            } else {
+                // Position relative to parent container
+                const parentId = s.parent_step_id!
+                const size = sizeById.get(parentId) || { width: 420, height: 300 }
+                const margin = groupPadding.x
+                const header = groupPadding.header
+                const childW = 150
+                const childH = 60
+                const p = (s.metadata as any)?.position || { x: margin, y: header }
+                const x = Math.max(margin, Math.min(p.x, size.width - childW - margin))
+                const y = Math.max(header, Math.min(p.y, size.height - childH - margin))
+                position = { x, y }
+            }
+
+            const node: Node = {
                 id: s.id,
                 type: 'processStep',
-                position: { x, y },
-                parentNode: parentId,
-                extent: 'parent',
+                position,
+                ...(isTop ? {} : { parentNode: s.parent_step_id!, extent: 'parent' as const }),
+                // Make containers non-selectable and non-intercepting; allow dragging via header
+                style: isContainer ? { pointerEvents: 'none' } : undefined,
+                draggable: true,
+                selectable: isContainer ? false : true,
+                dragHandle: isContainer ? '.rf-drag-handle' : undefined,
                 data: {
                     label: s.name,
                     description: s.description,
-                    stepData: { ...s, metadata: { ...(s.metadata || {}), position: { x, y } } }
+                    stepData: { ...s, metadata: { ...(s.metadata || {}), position } }
                 }
             }
+            reactFlowNodes.push(node)
         })
 
-        // Include edges with any combination of parent/child nodes; respect handle metadata if present
-        // Build node type map to determine top-level vs child
-        const nodeKind = new Map<string, 'parent' | 'child'>()
-        parentsWithSubProcesses.forEach(p => nodeKind.set(p.id, 'parent'))
-        subProcessSteps.forEach(c => nodeKind.set(c.id, 'child'))
+        // Build edges (respect metadata handles; otherwise fall back by top-level vs nested)
+        const idSet = new Set(reactFlowNodes.map(n => n.id))
+        const isTopLevel = (id: string) => {
+            const st = stepById.get(id)
+            return !!st && !st.parent_step_id
+        }
 
-        // Only include edges whose nodes exist
-        const existingNodeIds = new Set<string>([...parentNodesWithData, ...childNodes].map(n => n.id))
-        const reactFlowEdges: Edge[] = edgeData
-            .filter(edge => existingNodeIds.has(edge.from_step_id) && existingNodeIds.has(edge.to_step_id))
+        const reactFlowEdges: Edge[] = (edgeData || [])
+            .filter(e => idSet.has(e.from_step_id) && idSet.has(e.to_step_id))
             .map((edge) => {
                 let sourceHandle = (edge as any).metadata?.sourceHandle as string | undefined
                 let targetHandle = (edge as any).metadata?.targetHandle as string | undefined
-                const sKind = nodeKind.get(edge.from_step_id)
-                const tKind = nodeKind.get(edge.to_step_id)
-
-                // Normalize missing handle metadata
                 if (!sourceHandle || !targetHandle) {
-                    if (sKind === 'parent' && tKind === 'parent') {
+                    const sTop = isTopLevel(edge.from_step_id)
+                    const tTop = isTopLevel(edge.to_step_id)
+                    if (sTop && tTop) {
                         sourceHandle = 'right-source'
                         targetHandle = 'left-target'
-                    } else if (sKind === 'parent' && tKind === 'child') {
+                    } else if (sTop && !tTop) {
+                        // Parent -> Child uses left-to-left in this editor
                         sourceHandle = 'left-source'
                         targetHandle = 'left-target'
-                    } else if (sKind === 'child' && tKind === 'parent') {
-                        sourceHandle = 'left-source'
+                    } else if (!sTop && tTop) {
+                        // Child -> Parent uses right-to-right in this editor
+                        sourceHandle = 'right-source'
+                        targetHandle = 'right-target'
+                    } else {
+                        // Child -> Child
+                        sourceHandle = 'right-source'
                         targetHandle = 'left-target'
                     }
                 }
-
-        return ({
+                return ({
                     id: edge.id,
                     source: edge.from_step_id,
                     target: edge.to_step_id,
                     type: 'n8n-bezier',
                     sourceHandle,
                     targetHandle,
-                    data: {
-                        label: edge.label || '',
-                        edgeData: edge
-                    },
+                    data: { label: edge.label || '', edgeData: edge },
                 })
             })
 
-    return { nodes: [...parentNodesWithData, ...childNodes], edges: reactFlowEdges }
-    }, [])
+        return { nodes: reactFlowNodes, edges: reactFlowEdges }
+    }, [groupPadding])
 
     // Load data from Supabase
     const loadProcessFlow = useCallback(async () => {
