@@ -158,10 +158,10 @@ dagreGraph.setDefaultEdgeLabel(() => ({}))
 
 // Function to layout nodes within a group using Dagre
 const layoutNodesInGroup = (
-    groupNodes: Node[], 
-    groupEdges: Edge[], 
-    groupWidth: number, 
-    groupHeight: number, 
+    groupNodes: Node[],
+    groupEdges: Edge[],
+    groupWidth: number,
+    groupHeight: number,
     direction: 'TB' | 'LR' = 'TB',
     config = {
         nodeSpacing: 40,
@@ -188,7 +188,7 @@ const layoutNodesInGroup = (
 
     // Configure for compact layout within the group - use same direction as main layout
     const isHorizontal = direction === 'LR'
-    
+
     // Use configuration values for spacing
     groupGraph.setGraph({
         rankdir: direction,
@@ -296,7 +296,7 @@ export default function PlannerPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [layoutDirection, setLayoutDirection] = useState<'TB' | 'LR'>('LR') // Default to horizontal
-    
+
     // Layout configuration state
     const [layoutConfig, setLayoutConfig] = useState({
         nodeSpacing: 40,     // Space between nodes
@@ -612,8 +612,8 @@ export default function PlannerPage() {
                             <button
                                 onClick={() => onLayout('TB')}
                                 className={`px-3 py-1.5 rounded-md text-sm font-medium ${layoutDirection === 'TB'
-                                        ? 'bg-yellow-400 text-gray-900'
-                                        : 'bg-gray-700 hover:bg-gray-600 text-gray-100'
+                                    ? 'bg-yellow-400 text-gray-900'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-100'
                                     }`}
                             >
                                 Vertical Layout
@@ -621,8 +621,8 @@ export default function PlannerPage() {
                             <button
                                 onClick={() => onLayout('LR')}
                                 className={`px-3 py-1.5 rounded-md text-sm font-medium ${layoutDirection === 'LR'
-                                        ? 'bg-yellow-400 text-gray-900'
-                                        : 'bg-gray-700 hover:bg-gray-600 text-gray-100'
+                                    ? 'bg-yellow-400 text-gray-900'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-100'
                                     }`}
                             >
                                 Horizontal Layout
@@ -630,8 +630,8 @@ export default function PlannerPage() {
                             <button
                                 onClick={() => setShowConfig(!showConfig)}
                                 className={`px-3 py-1.5 rounded-md text-sm font-medium ${showConfig
-                                        ? 'bg-yellow-400 text-gray-900'
-                                        : 'bg-gray-700 hover:bg-gray-600 text-gray-100'
+                                    ? 'bg-yellow-400 text-gray-900'
+                                    : 'bg-gray-700 hover:bg-gray-600 text-gray-100'
                                     }`}
                             >
                                 ⚙️ Config
@@ -667,7 +667,7 @@ export default function PlannerPage() {
                                 />
                                 <span className="text-xs text-gray-400">{layoutConfig.nodeSpacing}px</span>
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium text-gray-300 mb-1">
                                     Rank Spacing
@@ -682,7 +682,7 @@ export default function PlannerPage() {
                                 />
                                 <span className="text-xs text-gray-400">{layoutConfig.rankSpacing}px</span>
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium text-gray-300 mb-1">
                                     Group Margin X
@@ -697,7 +697,7 @@ export default function PlannerPage() {
                                 />
                                 <span className="text-xs text-gray-400">{layoutConfig.groupMarginX}px</span>
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium text-gray-300 mb-1">
                                     Group Margin Y
@@ -712,7 +712,7 @@ export default function PlannerPage() {
                                 />
                                 <span className="text-xs text-gray-400">{layoutConfig.groupMarginY}px</span>
                             </div>
-                            
+
                             <div>
                                 <label className="block text-sm font-medium text-gray-300 mb-1">
                                     Max Nodes Per Rank
@@ -728,7 +728,7 @@ export default function PlannerPage() {
                                 <span className="text-xs text-gray-400">{layoutConfig.maxNodesPerRank} nodes</span>
                             </div>
                         </div>
-                        
+
                         <div className="flex items-center justify-between mt-4">
                             <div className="text-xs text-gray-400">
                                 Changes apply automatically to group layouts
