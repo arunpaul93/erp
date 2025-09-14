@@ -1379,7 +1379,27 @@ function WorkflowInner() {
             incidentEdgeIds.forEach((eid) => deletedEdgeIdsRef.current.add(eid))
             setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
             deletedNodeIdsRef.current.add(id)
-            setNodes((nds) => nds.filter((n) => n.id !== id))
+            setNodes((nds) => {
+                const del = nds.find((n) => n.id === id)
+                const parentId = del ? (((del.data as any)?.parentId as string | null | undefined) ?? null) : null
+                const next = nds.filter((n) => n.id !== id)
+                if (parentId) {
+                    const hasMore = next.some((n) => ((n.data as any)?.parentId as string | null | undefined) === parentId)
+                    if (!hasMore) {
+                        // Clear hasChildren and container sizing on parent, and collapse it in expanded set
+                        for (let i = 0; i < next.length; i++) {
+                            if (next[i].id === parentId) {
+                                const d: any = next[i].data || {}
+                                const { containerW, containerH, ...rest } = d
+                                next[i] = { ...next[i], data: { ...rest, hasChildren: false } }
+                                break
+                            }
+                        }
+                        setExpandedNodeIds((prev) => { const s = new Set(prev); s.delete(parentId); return s })
+                    }
+                }
+                return next
+            })
         } else {
             const id = menuTarget.id
             setEdges((eds) => eds.map((e) => ({ ...e, selected: e.id === id })))
@@ -1398,112 +1418,119 @@ function WorkflowInner() {
             data: { label: 'New Step', parentId },
             position: { x: 0, y: 0 },
         }
-        // Add the child only; no edge is created between process and subprocess
+
+        // Create the updated expanded set that includes the parent
+        const nextExpanded = new Set([...Array.from(expandedNodeIds), parentId])
+
+        // Update expanded state first
+        setExpandedNodeIds(nextExpanded)
+
+        // Atomically add child, mark parent as container, and pre-size/place children to avoid race conditions.
         setNodes((nds) => {
-            // Mark the parent as having children so it shows expand affordance later
-            const updated = nds.map((n) => (
+            const innerPadX = 16, innerPadY = 12, headerH = 22
+            const rowGapInside = layoutConfig.rowPadding
+            const innerColGap = layoutConfig.colGap
+
+            // 1) Append child and flag parent hasChildren
+            const base = nds.map((n) => (
                 n.id === parentId ? { ...n, data: { ...(n.data as any), hasChildren: true } } : n
             ))
-            return updated.concat(child)
-        })
-        // Ensure parent is expanded so the new child is visible
-        setExpandedNodeIds((prev) => {
-            const next = new Set(prev)
-            next.add(parentId)
-            return next
-        })
-        // Fit and animate to layout next frame
-        setTimeout(() => {
-            try {
-                // Pre-size the parent container immediately to include the new child (avoid delayed expansion)
-                const allNow = rf.getNodes()
-                const parentNode = allNow.find((n) => n.id === parentId)
-                const childrenNow = allNow.filter((n) => ((n.data as any)?.parentId as string | null | undefined) === parentId)
-                if (parentNode) {
-                    const innerPadX = 16, innerPadY = 12, headerH = 22
-                    const rowGapInside = layoutConfig.rowPadding
-                    const innerColGap = layoutConfig.colGap
-                    const sizes = childrenNow.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
-                    const childIdSet = new Set(childrenNow.map((n) => n.id))
-                    const internalEdges = rf.getEdges().filter((e) => childIdSet.has(e.source) && childIdSet.has(e.target))
+            const withChild = base.concat(child)
 
-                    let contW = estimateNodeWidth(parentNode)
-                    let contH = estimateNodeHeight(parentNode)
-                    const childPos = new Map<string, { x: number; y: number }>()
-                    if (sizes.length) {
-                        if (internalEdges.length > 0) {
-                            const levelsKids = computeLevels(childrenNow as any, internalEdges as any)
-                            const byLevelKids = orderWithinLevels(levelsKids, childrenNow as any, internalEdges as any)
-                            const levelKeys = Array.from(byLevelKids.keys()).sort((a, b) => a - b)
-                            const columnsKids: Node[][] = levelKeys.map((L) => byLevelKids.get(L) || [])
-                            const colW = columnsKids.map((arr) => Math.max(1, ...arr.map((x) => sizes.find((s) => s.id === x.id)!.w)))
-                            const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
-                            const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
-                            const innerH = Math.max(0, ...colH)
-                            contW = Math.max(contW, innerPadX * 2 + innerW)
-                            contH = Math.max(contH, headerH + layoutConfig.rowPadding + innerH + innerPadY)
-                            // x origins per column, centered
-                            const availableInnerW = Math.max(0, (contW - innerPadX * 2))
-                            const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
-                            const colX: number[] = []
-                            let runX = leftPad
-                            for (let i = 0; i < columnsKids.length; i++) { colX[i] = runX; runX += colW[i] + innerColGap }
-                            for (let i = 0; i < columnsKids.length; i++) {
-                                const arr = columnsKids[i]
-                                const startY = headerH + layoutConfig.rowPadding + Math.max(0, (innerH - colH[i]) / 2)
-                                let y = startY
-                                for (const node of arr) {
-                                    const s = sizes.find((x) => x.id === node.id)!
-                                    const x = colX[i] + Math.max(0, (colW[i] - s.w) / 2)
-                                    childPos.set(node.id, { x, y })
-                                    y += s.h + rowGapInside
-                                }
-                            }
-                        } else {
-                            const maxChildW = Math.max(...sizes.map((s) => s.w))
-                            const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
-                            contW = Math.max(contW, maxChildW + innerPadX * 2)
-                            contH = Math.max(contH, headerH + layoutConfig.rowPadding + childrenTotalH + innerPadY)
-                            let cy = headerH + layoutConfig.rowPadding
-                            for (const s of sizes) {
-                                const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
-                                childPos.set(s.id, { x: cx, y: cy })
-                                cy += s.h + rowGapInside
-                            }
-                        }
-                        // Apply pre-size so the container expands instantly
-                        setNodes((nds) => nds.map((n) => (
-                            n.id === parentId ? { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } } : n
-                        )))
-                        // Also immediately position current children and set wrap width so their label wrapping and height are stable
-                        const innerPadX2 = 16
-                        const wrapW = Math.max(64, (contW - innerPadX2 * 2))
-                        setNodes((nds) => nds.map((n) => {
-                            if (((n.data as any)?.parentId as string | null | undefined) !== parentId) return n
-                            const pos = childPos.get(n.id)
-                            if (!pos) return n
-                            return {
-                                ...n,
-                                position: { x: pos.x, y: pos.y },
-                                parentNode: parentId,
-                                extent: 'parent' as any,
-                                data: { ...(n.data as any), wrapW },
-                            }
-                        }))
+            // 2) Gather parent and its children from the updated array
+            const parentNode = withChild.find((n) => n.id === parentId)
+            if (!parentNode) return withChild // shouldn't happen
+            const childrenNow = withChild.filter((n) => ((n.data as any)?.parentId as string | null | undefined) === parentId)
+            if (!childrenNow.length) return withChild
+
+            // 3) Compute sizes and internal layout using existing edges (state snapshot)
+            const sizes = childrenNow.map((k) => ({ id: k.id, w: estimateNodeWidth(k), h: estimateNodeHeight(k) }))
+            const childIdSet = new Set(childrenNow.map((n) => n.id))
+            const internalEdges = edges.filter((e) => childIdSet.has(e.source) && childIdSet.has(e.target))
+
+            let contW = estimateNodeWidth(parentNode)
+            let contH = estimateNodeHeight(parentNode)
+            const childPos = new Map<string, { x: number; y: number }>()
+
+            if (internalEdges.length > 0) {
+                // Hierarchical layout inside container
+                const levelsKids = computeLevels(childrenNow as any, internalEdges as any)
+                const byLevelKids = orderWithinLevels(levelsKids, childrenNow as any, internalEdges as any)
+                const levelKeys = Array.from(byLevelKids.keys()).sort((a, b) => a - b)
+                const columnsKids: Node[][] = levelKeys.map((L) => byLevelKids.get(L) || [])
+                const colW = columnsKids.map((arr) => Math.max(1, ...arr.map((x) => sizes.find((s) => s.id === x.id)!.w)))
+                const colH = columnsKids.map((arr) => arr.reduce((a, x) => a + sizes.find((s) => s.id === x.id)!.h, 0) + Math.max(0, arr.length - 1) * rowGapInside)
+                const innerW = (colW.reduce((a, b) => a + b, 0)) + Math.max(0, columnsKids.length - 1) * innerColGap
+                const innerH = Math.max(0, ...colH)
+                contW = Math.max(contW, innerPadX * 2 + innerW)
+                contH = Math.max(contH, headerH + layoutConfig.rowPadding + innerH + innerPadY)
+                // Center columns
+                const availableInnerW = Math.max(0, (contW - innerPadX * 2))
+                const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
+                const colX: number[] = []
+                let runX = leftPad
+                for (let i = 0; i < columnsKids.length; i++) { colX[i] = runX; runX += colW[i] + innerColGap }
+                for (let i = 0; i < columnsKids.length; i++) {
+                    const arr = columnsKids[i]
+                    const startY = headerH + layoutConfig.rowPadding + Math.max(0, (innerH - colH[i]) / 2)
+                    let y = startY
+                    for (const node of arr) {
+                        const s = sizes.find((x) => x.id === node.id)!
+                        const x = colX[i] + Math.max(0, (colW[i] - s.w) / 2)
+                        childPos.set(node.id, { x, y })
+                        y += s.h + rowGapInside
                     }
                 }
+            } else {
+                // Vertical stack centered
+                const maxChildW = Math.max(...sizes.map((s) => s.w))
+                const childrenTotalH = sizes.reduce((a, s) => a + s.h, 0) + Math.max(0, sizes.length - 1) * rowGapInside
+                contW = Math.max(contW, maxChildW + innerPadX * 2)
+                contH = Math.max(contH, headerH + layoutConfig.rowPadding + childrenTotalH + innerPadY)
+                let cy = headerH + layoutConfig.rowPadding
+                for (const s of sizes) {
+                    const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
+                    childPos.set(s.id, { x: cx, y: cy })
+                    cy += s.h + rowGapInside
+                }
+            }
+
+            // 4) Apply: parent gets containerW/H; children get positioned + nested under parent with wrapW
+            const wrapW = Math.max(64, contW - innerPadX * 2)
+            return withChild.map((n) => {
+                if (n.id === parentId) {
+                    return { ...n, data: { ...(n.data as any), containerW: contW, containerH: contH } }
+                }
+                if (((n.data as any)?.parentId as string | null | undefined) === parentId) {
+                    const pos = childPos.get(n.id)
+                    if (pos) {
+                        return {
+                            ...n,
+                            position: { x: pos.x, y: pos.y },
+                            parentNode: parentId,
+                            extent: 'parent' as any,
+                            data: { ...(n.data as any), wrapW },
+                        }
+                    }
+                }
+                return n
+            })
+        })
+
+        // Focus and final layout after DOM updates settle
+        requestAnimationFrame(() => {
+            try {
                 const all = rf.getNodes()
                 const group = all.filter((n) => n.id === parentId || (n.data as any)?.parentId === parentId)
                 if (group.length) rf.fitView({ nodes: group, padding: 0.15, duration: 300 })
             } catch { }
             const currentNodes = rf.getNodes()
             const currentEdges = rf.getEdges()
-            const nextExpanded = new Set<string>([...Array.from(expandedNodeIds), parentId])
             const visible = computeVisibleNodeIds(currentNodes, nextExpanded)
             const useNodes = currentNodes.filter((n) => visible.has(n.id))
             const useEdges = currentEdges.filter((e) => visible.has(e.source) && visible.has(e.target))
             const { nodes: laid } = layout(useNodes, useEdges, layoutConfig, nextExpanded)
-            // Pre-apply container sizes for all expanded containers (parent + ancestors) to avoid size snap
+            // Pre-apply container sizes for all expanded containers (parent + ancestors)
             const laidMap = new Map(laid.map((n) => [n.id, n]))
             setNodes((nds) => nds.map((n) => {
                 if (!nextExpanded.has(n.id)) return n
@@ -1515,9 +1542,10 @@ function WorkflowInner() {
                 return n
             }))
             animateToLayout(laid, 260)
-        }, 0)
+        })
+
         setMenuPos(null)
-    }, [generateUuid, setNodes, rf, expandedNodeIds, layoutConfig, animateToLayout])
+    }, [generateUuid, setNodes, rf, expandedNodeIds, layoutConfig, animateToLayout, edges])
 
     // Normalize any temporary IDs to UUIDs (for prior sessions) and update state
     const normalizeIdsIfNeeded = useCallback(() => {
@@ -1788,15 +1816,18 @@ function WorkflowInner() {
                 contW = Math.max(contW, innerPadX * 2 + innerW)
                 // Add rowPadding gap under the header during expand pre-sizing
                 contH = Math.max(contH, headerH + layoutConfig.rowPadding + innerH + innerPadY)
-                // x per column
+                // x per column, centered horizontally; y starts centered per column
+                const availableInnerW = Math.max(0, (contW - innerPadX * 2))
+                const leftPad = innerPadX + Math.max(0, (availableInnerW - innerW) / 2)
                 const colX: number[] = []
-                let runX = innerPadX
+                let runX = leftPad
                 for (let i = 0; i < columnsKids.length; i++) { colX[i] = runX; runX += colW[i] + innerColGap }
                 // place nodes
                 const childPos = new Map<string, { x: number; y: number }>()
                 for (let i = 0; i < columnsKids.length; i++) {
                     const arr = columnsKids[i]
-                    let y = headerH + layoutConfig.rowPadding
+                    const startY = headerH + layoutConfig.rowPadding + Math.max(0, (innerH - colH[i]) / 2)
+                    let y = startY
                     for (const node of arr) {
                         const s = sizes.find((x) => x.id === node.id)!
                         const x = colX[i] + Math.max(0, (colW[i] - s.w) / 2)
@@ -1804,7 +1835,15 @@ function WorkflowInner() {
                         y += s.h + rowGapInside
                     }
                 }
-                childNodes = childNodesRaw.map((c) => ({ ...c, position: childPos.get(c.id)!, parentNode: nodeId, extent: 'parent' as any }))
+                childNodes = childNodesRaw.map((c) => {
+                    const pos = childPos.get(c.id)!
+                    // choose wrap width matching the column the child belongs to
+                    let wrapW = Math.max(64, contW - innerPadX * 2)
+                    for (let i = 0; i < columnsKids.length; i++) {
+                        if (columnsKids[i].some((n) => n.id === c.id)) { wrapW = Math.max(64, colW[i]); break }
+                    }
+                    return { ...c, position: pos, parentNode: nodeId, extent: 'parent' as any, data: { ...(c.data as any), wrapW } }
+                })
             } else {
                 // Vertical fallback
                 const maxChildW = sizes.length ? Math.max(...sizes.map((s) => s.w)) : 0
@@ -1815,7 +1854,8 @@ function WorkflowInner() {
                 childNodes = childNodesRaw.map((c) => {
                     const s = sizes.find((x) => x.id === c.id)!
                     const cx = innerPadX + Math.max(0, (contW - 2 * innerPadX - s.w) / 2)
-                    const node: Node = { ...c, position: { x: cx, y: cy }, parentNode: nodeId, extent: 'parent' as any }
+                    const wrapW = Math.max(64, contW - innerPadX * 2)
+                    const node: Node = { ...c, position: { x: cx, y: cy }, parentNode: nodeId, extent: 'parent' as any, data: { ...(c.data as any), wrapW } }
                     cy += s.h + rowGapInside
                     return node
                 })
