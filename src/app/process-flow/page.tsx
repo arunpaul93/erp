@@ -46,12 +46,24 @@ type ProcessNodeData = {
   parent_step_id?: string | null
   onContextMenu?: (e: React.MouseEvent, nodeId: string) => void
   onDoubleClick?: (nodeId: string) => void
+  isParent?: boolean
+  isCollapsed?: boolean
+  onToggleCollapse?: (nodeId: string) => void
 }
 
 const NODE_DEFAULT_WIDTH = 200
 const NODE_DEFAULT_HEIGHT = 60
+const GROUP_NODE_MIN_WIDTH = 300
+const GROUP_NODE_MIN_HEIGHT = 150
 
-function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeData>) {
+function ProcessNode(props: NodeProps<ProcessNodeData>) {
+  const { id, data, selected } = props
+  
+  // If this is a parent node, render as GroupNode instead
+  if (data.isParent) {
+    return <GroupNode {...props} />
+  }
+
   return (
     <div
       onContextMenu={(e) => data.onContextMenu?.(e, id)}
@@ -60,7 +72,10 @@ function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeData>) {
         "rounded-md border bg-white text-slate-800 shadow-sm px-3 py-2 min-w-[180px]" +
         (selected ? " ring-2 ring-blue-400" : "")
       }
-      style={{ width: NODE_DEFAULT_WIDTH }}
+      style={{ 
+        width: NODE_DEFAULT_WIDTH,
+        zIndex: data.parent_step_id ? 20 : 1 // Child nodes have higher z-index
+      }}
     >
       <Handle id="left" type="target" position={Position.Left} />
       <div 
@@ -77,6 +92,82 @@ function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeData>) {
           {data.description}
         </div>
       ) : null}
+      <Handle id="right" type="source" position={Position.Right} />
+    </div>
+  )
+}
+
+function GroupNode({ id, data, selected }: NodeProps<ProcessNodeData>) {
+  return (
+    <div
+      onContextMenu={(e) => data.onContextMenu?.(e, id)}
+      onDoubleClick={() => data.onDoubleClick?.(id)}
+      className={
+        "rounded-md border-2 border-blue-300 bg-blue-50 shadow-sm p-3" +
+        (selected ? " ring-2 ring-blue-400" : "")
+      }
+      style={{ 
+        minWidth: GROUP_NODE_MIN_WIDTH, 
+        minHeight: GROUP_NODE_MIN_HEIGHT,
+        width: '100%',
+        height: '100%',
+        position: 'relative',
+        zIndex: 1, // Lower z-index for group nodes
+        overflow: 'visible' // Allow child handles to extend outside
+      }}
+    >
+      <Handle id="left" type="target" position={Position.Left} />
+      
+      {/* Group header with expand/collapse button */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <div className="text-xs text-blue-600 font-semibold">GROUP</div>
+          <div className="font-medium text-blue-800" title={data.label}>
+            {data.label || "Untitled Group"}
+          </div>
+        </div>
+        <button
+          className="text-blue-600 hover:text-blue-800 p-1 rounded"
+          onClick={(e) => {
+            e.stopPropagation()
+            if (data.onToggleCollapse) {
+              data.onToggleCollapse(id)
+            }
+          }}
+        >
+          {data.isCollapsed ? "▶" : "▼"}
+        </button>
+      </div>
+
+      {data.description && (
+        <div className="text-xs text-blue-600 mb-2" title={data.description}>
+          {data.description}
+        </div>
+      )}
+
+      {/* Container area for child nodes */}
+      {!data.isCollapsed && (
+        <div 
+          className="border border-blue-200 rounded bg-white/30 relative"
+          style={{ 
+            minHeight: '200px',
+            width: '100%',
+            marginTop: '8px',
+            overflow: 'visible' // Allow handles to extend outside
+          }}
+        >
+          {/* This div provides the container space where React Flow will render child nodes */}
+          <div 
+            className="absolute inset-2 pointer-events-none"
+            style={{ overflow: 'visible' }}
+          >
+            <div className="text-xs text-gray-400 text-center mt-2">
+              Child nodes appear here
+            </div>
+          </div>
+        </div>
+      )}
+
       <Handle id="right" type="source" position={Position.Right} />
     </div>
   )
@@ -132,6 +223,184 @@ async function layoutWithElk(nodes: Node[], edges: Edge[], opts: { ranksep: numb
   return nextNodes
 }
 
+// Recursive hierarchical layout function
+async function layoutHierarchical(nodes: Node<ProcessNodeData>[], edges: Edge[], opts: { ranksep: number; nodesep: number; marginx: number; marginy: number; direction: "LR" | "TB" }) {
+  const elk = new ELK()
+  
+  // Step 1: Group nodes by parent relationships
+  const parentGroups = new Map<string, Node<ProcessNodeData>[]>()
+  const rootNodes: Node<ProcessNodeData>[] = []
+  const parentNodes = new Map<string, Node<ProcessNodeData>>()
+  
+  nodes.forEach(node => {
+    if (node.data.isParent) {
+      parentNodes.set(node.id, node)
+      parentGroups.set(node.id, [])
+    }
+  })
+  
+  nodes.forEach(node => {
+    if (node.data.parent_step_id && parentGroups.has(node.data.parent_step_id)) {
+      parentGroups.get(node.data.parent_step_id)!.push(node)
+    } else if (!node.data.parent_step_id) {
+      rootNodes.push(node)
+    }
+  })
+  
+  const updatedNodes = [...nodes]
+  const PADDING = 60 // Increased padding for handles - left/right handles need space
+  const HEADER_HEIGHT = 60 // Height for group header
+  
+  // Step 2: Layout children within each group and calculate group sizes
+  for (const [parentId, children] of parentGroups) {
+    if (children.length === 0) continue
+    
+    const parentNode = parentNodes.get(parentId)!
+    if (parentNode.data.isCollapsed) continue // Skip collapsed groups
+    
+    // Layout children using ELK
+    const childEdges = edges.filter(edge => 
+      children.some(child => child.id === edge.source) && 
+      children.some(child => child.id === edge.target)
+    )
+    
+    const childGraph: any = {
+      id: parentId + "_children",
+      layoutOptions: {
+        "elk.algorithm": "layered",
+        "elk.direction": opts.direction === "LR" ? "RIGHT" : "DOWN",
+        "elk.layered.spacing.nodeNodeBetweenLayers": String(opts.ranksep * 0.7), // Tighter spacing for children
+        "elk.spacing.nodeNode": String(opts.nodesep * 0.7),
+        "elk.padding.top": String(30), // More padding for handles
+        "elk.padding.bottom": String(30),
+        "elk.padding.left": String(30), // More padding for left handles
+        "elk.padding.right": String(30), // More padding for right handles
+      },
+      children: children.map(child => ({ 
+        id: child.id, 
+        width: NODE_DEFAULT_WIDTH, 
+        height: NODE_DEFAULT_HEIGHT 
+      })),
+      edges: childEdges.map(edge => ({ 
+        id: edge.id, 
+        sources: [edge.source], 
+        targets: [edge.target] 
+      }))
+    }
+    
+    try {
+      const childResult = await elk.layout(childGraph)
+      
+      // Calculate bounding box of children
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      
+      if (childResult.children) {
+        childResult.children.forEach((child: any) => {
+          const x = child.x ?? 0
+          const y = child.y ?? 0
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          maxX = Math.max(maxX, x + NODE_DEFAULT_WIDTH)
+          maxY = Math.max(maxY, y + NODE_DEFAULT_HEIGHT)
+        })
+        
+        // Update child positions (relative to parent)
+        childResult.children.forEach((child: any) => {
+          const childNode = children.find(c => c.id === child.id)
+          if (childNode) {
+            const nodeIndex = updatedNodes.findIndex(n => n.id === child.id)
+            if (nodeIndex !== -1) {
+              updatedNodes[nodeIndex] = {
+                ...updatedNodes[nodeIndex],
+                position: {
+                  x: (child.x ?? 0) - minX + PADDING,
+                  y: (child.y ?? 0) - minY + PADDING + HEADER_HEIGHT
+                }
+              }
+            }
+          }
+        })
+        
+        // Update parent size based on children
+        const contentWidth = maxX - minX + 2 * PADDING
+        const contentHeight = maxY - minY + 2 * PADDING + HEADER_HEIGHT
+        const groupWidth = Math.max(GROUP_NODE_MIN_WIDTH, contentWidth)
+        const groupHeight = Math.max(GROUP_NODE_MIN_HEIGHT, contentHeight)
+        
+        const parentIndex = updatedNodes.findIndex(n => n.id === parentId)
+        if (parentIndex !== -1) {
+          updatedNodes[parentIndex] = {
+            ...updatedNodes[parentIndex],
+            style: {
+              ...updatedNodes[parentIndex].style,
+              width: groupWidth,
+              height: groupHeight
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error laying out children for group', parentId, error)
+    }
+  }
+  
+  // Step 3: Layout root-level nodes (including parent groups)
+  const rootLevelNodes = updatedNodes.filter(node => !node.data.parent_step_id)
+  const rootLevelEdges = edges.filter(edge => 
+    rootLevelNodes.some(node => node.id === edge.source) && 
+    rootLevelNodes.some(node => node.id === edge.target)
+  )
+  
+  if (rootLevelNodes.length > 0) {
+    const rootGraph: any = {
+      id: "root",
+      layoutOptions: {
+        "elk.algorithm": "layered",
+        "elk.direction": opts.direction === "LR" ? "RIGHT" : "DOWN",
+        "elk.layered.spacing.nodeNodeBetweenLayers": String(opts.ranksep),
+        "elk.spacing.nodeNode": String(opts.nodesep),
+        "elk.padding.top": String(opts.marginy),
+        "elk.padding.bottom": String(opts.marginy),
+        "elk.padding.left": String(opts.marginx),
+        "elk.padding.right": String(opts.marginx),
+      },
+      children: rootLevelNodes.map(node => ({ 
+        id: node.id, 
+        width: node.style?.width || NODE_DEFAULT_WIDTH, 
+        height: node.style?.height || NODE_DEFAULT_HEIGHT 
+      })),
+      edges: rootLevelEdges.map(edge => ({ 
+        id: edge.id, 
+        sources: [edge.source], 
+        targets: [edge.target] 
+      }))
+    }
+    
+    try {
+      const rootResult = await elk.layout(rootGraph)
+      
+      if (rootResult.children) {
+        rootResult.children.forEach((child: any) => {
+          const nodeIndex = updatedNodes.findIndex(n => n.id === child.id)
+          if (nodeIndex !== -1) {
+            updatedNodes[nodeIndex] = {
+              ...updatedNodes[nodeIndex],
+              position: {
+                x: child.x ?? 0,
+                y: child.y ?? 0
+              }
+            }
+          }
+        })
+      }
+    } catch (error) {
+      console.error('Error laying out root nodes', error)
+    }
+  }
+  
+  return updatedNodes
+}
+
 export default function ProcessFlowPage() {
   const { selectedOrgId } = useOrg()
 
@@ -161,6 +430,134 @@ export default function ProcessFlowPage() {
     nodesRef.current = nodes
   }, [nodes])
 
+  // Utility function to update parent status for all nodes
+  const updateParentStatus = useCallback((nodeList: Node<ProcessNodeData>[]) => {
+    const parentNodeIds = new Set<string>()
+    nodeList.forEach((node) => {
+      if (node.data.parent_step_id) {
+        parentNodeIds.add(node.data.parent_step_id)
+      }
+    })
+
+    return nodeList.map((node) => {
+      const isParent = parentNodeIds.has(node.id)
+      const isChild = !!node.data.parent_step_id
+      
+      if (isParent) {
+        // This is a parent node
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            isParent: true,
+            isCollapsed: node.data.isCollapsed ?? true // Default to collapsed for parent nodes
+          },
+          style: {
+            ...node.style,
+            width: node.data.isCollapsed !== false ? GROUP_NODE_MIN_WIDTH : Math.max(GROUP_NODE_MIN_WIDTH, 500),
+            height: node.data.isCollapsed !== false ? GROUP_NODE_MIN_HEIGHT : Math.max(GROUP_NODE_MIN_HEIGHT, 400)
+          }
+        }
+      } else if (isChild) {
+        // This is a child node
+        const parentNode = nodeList.find(n => n.id === node.data.parent_step_id)
+        const isParentCollapsed = parentNode?.data?.isCollapsed !== false
+        
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            isParent: false
+          },
+          hidden: isParentCollapsed,
+          parentId: isParentCollapsed ? undefined : (node.data.parent_step_id || undefined),
+          extent: isParentCollapsed ? undefined : ('parent' as const),
+          draggable: true
+        }
+      } else {
+        // Regular node
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            isParent: false
+          },
+          hidden: false,
+          parentId: undefined,
+          extent: undefined,
+          draggable: true
+        }
+      }
+    })
+  }, [])
+
+  // Toggle collapse state for group nodes
+  const toggleGroupCollapse = useCallback(async (groupId: string) => {
+    setNodes((currentNodes) => {
+      const groupNode = currentNodes.find(n => n.id === groupId)
+      if (!groupNode) return currentNodes
+
+      const newIsCollapsed = !groupNode.data.isCollapsed
+      
+      // Get child nodes
+      const childNodes = currentNodes.filter(n => n.data.parent_step_id === groupId)
+
+      // Update nodes with new collapse state and parent-child relationships
+      const updatedNodes = currentNodes.map((node) => {
+        if (node.id === groupId) {
+          // Update the group node
+          return {
+            ...node,
+            data: {
+              ...node.data,
+              isCollapsed: newIsCollapsed
+            },
+            // Ensure group node has proper size when expanded
+            style: {
+              ...node.style,
+              width: newIsCollapsed ? GROUP_NODE_MIN_WIDTH : Math.max(GROUP_NODE_MIN_WIDTH, 500),
+              height: newIsCollapsed ? GROUP_NODE_MIN_HEIGHT : Math.max(GROUP_NODE_MIN_HEIGHT, 400)
+            }
+          }
+        }
+        
+        // Handle child nodes
+        if (node.data.parent_step_id === groupId) {
+          if (newIsCollapsed) {
+            // Hide children when collapsed
+            return {
+              ...node,
+              hidden: true,
+              parentId: undefined,
+              extent: undefined,
+              draggable: true
+            }
+          } else {
+            // Show children when expanded with proper parent relationship
+            const childIndex = childNodes.findIndex(child => child.id === node.id)
+            return {
+              ...node,
+              hidden: false,
+              parentId: groupId,
+              extent: 'parent' as const,
+              draggable: true,
+              // Position relative to parent with more spacing for handles
+              position: {
+                x: 30 + (childIndex % 2) * 180, // 2 columns with more space
+                y: 60 + Math.floor(childIndex / 2) * 100 // More vertical space
+              }
+            }
+          }
+        }
+        
+        return node
+      })
+
+      return updatedNodes
+    })
+    setDirty(true)
+  }, [])
+
   const onNodeContextMenu = useCallback((e: React.MouseEvent, nodeId: string) => {
     e.preventDefault()
     setMenu({ x: e.clientX, y: e.clientY, targetType: "node", targetId: nodeId })
@@ -181,8 +578,12 @@ export default function ProcessFlowPage() {
   }, [])
 
   const nodeInteractionData = useMemo(
-    () => ({ onContextMenu: onNodeContextMenu, onDoubleClick: onNodeDoubleClick }),
-    [onNodeContextMenu, onNodeDoubleClick]
+    () => ({ 
+      onContextMenu: onNodeContextMenu, 
+      onDoubleClick: onNodeDoubleClick,
+      onToggleCollapse: toggleGroupCollapse
+    }),
+    [onNodeContextMenu, onNodeDoubleClick, toggleGroupCollapse]
   )
 
   const isValidConnection = useCallback((conn: Connection) => {
@@ -229,13 +630,16 @@ export default function ProcessFlowPage() {
             ...nodeInteractionData 
           },
         }
-        setNodes((ns) => ns.concat(newNode))
+        setNodes((ns) => {
+          const updatedNodes = ns.concat(newNode)
+          return updateParentStatus(updatedNodes)
+        })
         setEdges((es) => addEdge({ id: crypto.randomUUID(), source: connectFrom.nodeId, sourceHandle: "right", target: id, targetHandle: "left" }, es))
         setDirty(true)
       }
       setConnectFrom(null)
     },
-    [connectFrom, nodeInteractionData, setEdges, setNodes, nodes]
+    [connectFrom, nodeInteractionData, setEdges, setNodes, nodes, updateParentStatus]
   )
 
   const fetchData = useCallback(async () => {
@@ -275,7 +679,10 @@ export default function ProcessFlowPage() {
         .filter((r) => r.from_step_id && r.to_step_id)
         .map((r) => ({ id: r.id, source: r.from_step_id!, target: r.to_step_id!, label: r.label ?? undefined, sourceHandle: "right", targetHandle: "left" }))
 
-      setNodes(ns)
+      // Update parent status for all nodes
+      const nodesWithParentStatus = updateParentStatus(ns)
+      
+      setNodes(nodesWithParentStatus)
       setEdges(es)
       setOriginalNodeIds(new Set(ns.map((n) => n.id)))
       setOriginalEdgeIds(new Set(es.map((e) => e.id)))
@@ -287,7 +694,7 @@ export default function ProcessFlowPage() {
     } finally {
       setLoading(false)
     }
-  }, [selectedOrgId])
+  }, [selectedOrgId, nodeInteractionData, updateParentStatus])
 
   useEffect(() => {
     fetchData()
@@ -307,12 +714,15 @@ export default function ProcessFlowPage() {
         ...nodeInteractionData 
       } 
     }
-    setNodes((ns) => ns.concat(newNode))
+    setNodes((ns) => {
+      const updatedNodes = ns.concat(newNode)
+      return updateParentStatus(updatedNodes)
+    })
     setDirty(true)
-  }, [nodeInteractionData])
+  }, [nodeInteractionData, updateParentStatus])
 
   const layout = useCallback(async () => {
-    const laidOut = await layoutWithElk(nodes, edges, { ranksep, nodesep, marginx: paddingX, marginy: paddingY, direction: "LR" })
+    const laidOut = await layoutHierarchical(nodes, edges, { ranksep, nodesep, marginx: paddingX, marginy: paddingY, direction: "LR" })
     setNodes(laidOut)
     setDirty(true)
   }, [edges, nodes, paddingX, paddingY, ranksep, nodesep])
