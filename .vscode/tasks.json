@@ -53,6 +53,13 @@
 				"$eslint - stylish"
 			],
 			"group": "build"
+		},
+		{
+			"label": "npm: install-elk",
+			"type": "shell",
+			"command": "npm i elkjs",
+			"isBackground": false,
+			"group": "build"
 		}
 	]
 }

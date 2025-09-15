@@ -16,11 +16,13 @@ import {
   MarkerType,
   Position,
   Handle,
+  type ReactFlowInstance,
   type Edge,
   type Node,
   type NodeProps
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import ELK from 'elkjs/lib/elk.bundled.js'
 
 // Custom editable node for process steps
 type StepNodeData = { label: string; description?: string; editing?: boolean; onChange?: (name: string, desc: string) => void }
@@ -121,6 +123,9 @@ export default function WorkflowPage() {
     | { visible: true; x: number; y: number; edgeId: string; value: string }
   >(null)
   const connectingFromRef = React.useRef<string | null>(null)
+  const flowRef = React.useRef<ReactFlowInstance | null>(null)
+  // Keep last computed layout positions (from ELK) so we can snap nodes back after drag
+  const layoutPosRef = React.useRef<Map<string, { x: number; y: number }>>(new Map())
   // Layout config state
   const [showConfig, setShowConfig] = useState(false)
   const [colGap, setColGap] = useState<number>(280)
@@ -249,7 +254,7 @@ export default function WorkflowPage() {
       }
     })
 
-    const laidEdges = rawEdges.map((e) => {
+  const laidEdges = rawEdges.map((e) => {
       const text = (((e as any).data?.labelText ?? (typeof (e as any).label === 'string' ? (e as any).label : '')) as string) || ''
       return {
         ...e,
@@ -275,13 +280,98 @@ export default function WorkflowPage() {
     return { nodes: laidOut, edges: laidEdges }
   }, [colGap, rowGap])
 
-  // Re-layout current graph when gaps change
-  useEffect(() => {
-    setNodes(prevNodes => {
-      const { nodes: n, edges: e } = computeLayout(prevNodes, edges)
-      setEdges(e)
-      return n
+  // Edge styling helper (no node positioning): preserves labels and dark theme
+  const styleEdges = useCallback((rawEdges: Edge[]): Edge[] => {
+    return rawEdges.map((e) => {
+      const text = (((e as any).data?.labelText ?? (typeof (e as any).label === 'string' ? (e as any).label : '')) as string) || ''
+      return {
+        ...e,
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          color: '#f59e0b'
+        },
+        style: { stroke: '#f59e0b' },
+        label: text && text.trim().length ? text : undefined,
+        labelShowBg: true,
+        labelBgPadding: [2, 1] as [number, number],
+        labelBgBorderRadius: 3,
+        labelBgStyle: { fill: '#030712', stroke: 'none' },
+        labelStyle: {
+          fill: '#ffffff',
+          fontSize: 11,
+          fontWeight: 600,
+          whiteSpace: 'nowrap' as any,
+        },
+      }
     })
+  }, [])
+
+  // ELK auto layout: layered algorithm with spacing based on colGap/rowGap
+  const elk = useMemo(() => new ELK({ defaultLayoutOptions: {} as any }), [])
+  const applyElkLayout = useCallback(async (rawNodes: Node[], rawEdges: Edge[]): Promise<{ nodes: Node[]; edges: Edge[] }> => {
+    // Build ELK graph
+    const elkGraph: any = {
+      id: 'root',
+      layoutOptions: {
+        'elk.algorithm': 'layered',
+        'elk.direction': 'RIGHT',
+        'elk.spacing.nodeNodeBetweenLayers': String(colGap),
+        'elk.layered.spacing.nodeNodeBetweenLayers': String(colGap),
+        'elk.spacing.nodeNode': String(Math.max(40, rowGap - 40)),
+        'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
+        'elk.layered.crossingMinimization.semiInteractive': 'true',
+      },
+      children: rawNodes.map((n) => ({
+        id: n.id,
+        width: (n.style as any)?.width ?? 220,
+        height: (n.style as any)?.height ?? 80,
+      })),
+      edges: rawEdges.map((e) => ({ id: String(e.id), sources: [String(e.source)], targets: [String(e.target)] }))
+    }
+
+    const res = await elk.layout(elkGraph)
+
+  const posById = new Map<string, { x: number; y: number }>()
+    for (const c of res.children || []) {
+      posById.set(c.id, { x: c.x || 0, y: c.y || 0 })
+    }
+
+  // Remember positions for snap-back on drag stop
+  layoutPosRef.current = posById
+
+    // Reuse existing styling and label settings
+    const laidNodes = rawNodes.map((n) => ({
+      ...n,
+      position: posById.get(n.id) || { x: 0, y: 0 },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      style: {
+        ...(n as any).style,
+        width: (n as any).style?.width ?? 220,
+        borderRadius: (n as any).style?.borderRadius ?? 12,
+        border: (n as any).style?.border ?? '1px solid #1f2937',
+        background: (n as any).style?.background ?? 'rgba(17,24,39,0.9)',
+        color: (n as any).style?.color ?? '#e5e7eb',
+        boxSizing: 'border-box',
+      },
+    }))
+
+    // Preserve ELK positions; only style edges without changing node positions
+    const styledEdges = styleEdges(rawEdges)
+    return { nodes: laidNodes, edges: styledEdges }
+  }, [elk, colGap, rowGap, styleEdges])
+
+  // Re-layout current graph when gaps change via ELK
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const { nodes: n, edges: e } = await applyElkLayout(nodes, edges)
+      if (!cancelled) {
+        setNodes(n)
+        setEdges(e)
+      }
+    })()
+    return () => { cancelled = true }
   }, [colGap, rowGap])
 
   const fetchData = useCallback(async () => {
@@ -333,8 +423,8 @@ export default function WorkflowPage() {
       data: { labelText: e.label ?? '' } as any,
         }))
 
-      const allNodes = [...stepNodes]
-      const { nodes: laidNodes, edges: laidEdges } = computeLayout(allNodes, edgeList)
+  const allNodes = [...stepNodes]
+  const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, edgeList)
       setNodes(laidNodes)
       setEdges(laidEdges)
     } catch (err: any) {
@@ -342,7 +432,7 @@ export default function WorkflowPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [selectedOrgId, computeLayout, setNodes, setEdges])
+  }, [selectedOrgId, setNodes, setEdges])
 
   useEffect(() => {
     fetchData()
@@ -517,6 +607,35 @@ export default function WorkflowPage() {
     }
   }, [selectedOrgId, fetchData])
 
+  // When a node drag ends, snap it back to the last ELK layout position (with CSS transition)
+  const onNodeDragStop = useCallback((_: any, node: Node) => {
+    const target = layoutPosRef.current.get(String(node.id))
+    if (!target) return
+    // Read current position from state (node passed in may not have latest state reference)
+    const current = nodes.find((n) => n.id === node.id)?.position || node.position
+    const start = { x: current.x, y: current.y }
+    const end = { x: target.x, y: target.y }
+    const duration = 250
+    const startAt = performance.now()
+
+    let raf = 0
+    const step = (t: number) => {
+      const elapsed = t - startAt
+      const k = Math.min(1, elapsed / duration)
+      // easeOutCubic
+      const e = 1 - Math.pow(1 - k, 3)
+      const x = start.x + (end.x - start.x) * e
+      const y = start.y + (end.y - start.y) * e
+      setNodes((ns) => ns.map((n) => (n.id === node.id ? { ...n, position: { x, y } } : n)))
+      if (k < 1) {
+        raf = requestAnimationFrame(step)
+      }
+    }
+    raf = requestAnimationFrame(step)
+    // Cleanup if component unmounts during animation
+    return () => cancelAnimationFrame(raf)
+  }, [nodes, setNodes])
+
   // Context menu handlers
   const openNodeMenu = useCallback((event: React.MouseEvent, nodeId: string) => {
     event.preventDefault()
@@ -603,6 +722,20 @@ export default function WorkflowPage() {
         </div>
         <div className="flex items-center gap-3">
           <button
+            onClick={() => flowRef.current?.fitView({ padding: 0.15 })}
+            className="inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
+            aria-label="Fit to screen"
+            title="Fit to screen"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 9V5a2 2 0 0 1 2-2h4" />
+              <path d="M21 9V5a2 2 0 0 0-2-2h-4" />
+              <path d="M3 15v4a2 2 0 0 0 2 2h4" />
+              <path d="M21 15v4a2 2 0 0 1-2 2h-4" />
+            </svg>
+            Fit
+          </button>
+          <button
             onClick={() => setShowConfig(v => !v)}
             className="inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
             aria-label="Layout settings"
@@ -685,9 +818,12 @@ export default function WorkflowPage() {
             edges={edges}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
+            minZoom={0.01}
+            maxZoom={50}
             onConnect={onConnect}
             onConnectStart={onConnectStart}
             onConnectEnd={onConnectEnd}
+            onNodeDragStop={onNodeDragStop}
             onNodeDoubleClick={(_, n) => startEditingNode(String(n.id))}
             onEdgeDoubleClick={(e, ed) => {
               e.preventDefault();
@@ -705,6 +841,7 @@ export default function WorkflowPage() {
             onEdgeContextMenu={(e, ed) => openEdgeMenu(e, String(ed.id))}
             onPaneContextMenu={(e) => { e.preventDefault(); closeMenu() }}
             nodeTypes={{ stepNode: StepNode }}
+            onInit={(instance) => { flowRef.current = instance }}
             fitView
           >
             <Background color="#1f2937" variant={BackgroundVariant.Dots} gap={16} size={1} />
@@ -714,6 +851,7 @@ export default function WorkflowPage() {
                 color: '#e5e7eb', // text-gray-200
                 border: '1px solid #374151', // border-gray-700
               }}
+              fitViewOptions={{ padding: 0.15 }}
             />
           </ReactFlow>
           {contextMenu.visible && (

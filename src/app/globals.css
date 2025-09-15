@@ -84,20 +84,11 @@ body {
   box-shadow: 0 0 6px 0 rgba(251, 191, 36, 0.8);
 }
 
-/* Smoothly animate nodes back to layout positions */
-.react-flow__node {
-  transition: transform 280ms ease-out;
+/* Disable CSS transitions for nodes; we animate positions via JS so edges follow */
+.react-flow__node,
+.xyflow__node {
+  transition: none !important;
   will-change: transform;
-}
-
-/* Disable transition during drag for responsiveness */
-.react-flow__node.dragging {
-  transition: none !important;
-}
-
-/* Disable transitions when JS tween is active */
-.react-flow__node.no-transition {
-  transition: none !important;
 }
 
 /* Animated edge dashes */
