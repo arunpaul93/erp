@@ -36,6 +36,13 @@
 			"command": "npm run dev",
 			"isBackground": true,
 			"group": "build"
+		},
+		{
+			"label": "npm: dev",
+			"type": "shell",
+			"command": "npm run dev",
+			"isBackground": true,
+			"group": "build"
 		}
 	]
 }
