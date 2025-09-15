@@ -43,6 +43,7 @@ type EdgeRow = {
 type ProcessNodeData = {
   label: string
   description?: string | null
+  parent_step_id?: string | null
   onContextMenu?: (e: React.MouseEvent, nodeId: string) => void
   onDoubleClick?: (nodeId: string) => void
 }
@@ -62,7 +63,13 @@ function ProcessNode({ id, data, selected }: NodeProps<ProcessNodeData>) {
       style={{ width: NODE_DEFAULT_WIDTH }}
     >
       <Handle id="left" type="target" position={Position.Left} />
-      <div className="font-medium break-words whitespace-normal" title={data.label}>
+      <div 
+        className={
+          "font-medium break-words whitespace-normal" +
+          (data.label === "New Step" ? " text-slate-400 italic" : "")
+        } 
+        title={data.label}
+      >
         {data.label || "Untitled"}
       </div>
       {data.description ? (
@@ -162,7 +169,15 @@ export default function ProcessFlowPage() {
   const onNodeDoubleClick = useCallback((nodeId: string) => {
     const n = nodesRef.current.find((x) => x.id === nodeId)
     if (!n) return
-    setEditDlg({ id: nodeId, label: String((n.data as any)?.label ?? ""), description: String((n.data as any)?.description ?? "") })
+    
+    const currentLabel = String((n.data as any)?.label ?? "")
+    const displayLabel = currentLabel === "New Step" ? "" : currentLabel
+    
+    setEditDlg({ 
+      id: nodeId, 
+      label: displayLabel, 
+      description: String((n.data as any)?.description ?? "") 
+    })
   }, [])
 
   const nodeInteractionData = useMemo(
@@ -198,11 +213,21 @@ export default function ProcessFlowPage() {
       if (targetIsPane) {
         const id = crypto.randomUUID()
         const position = rfRef.current.project({ x: e.clientX, y: e.clientY })
+        
+        // Find the source node to inherit its parent_step_id
+        const sourceNode = nodes.find(n => n.id === connectFrom.nodeId)
+        const sourceParentStepId = sourceNode?.data?.parent_step_id || null
+        
         const newNode: Node<ProcessNodeData> = {
           id,
           type: "process",
           position,
-          data: { label: "New Step", description: "", ...nodeInteractionData },
+          data: { 
+            label: "New Step", 
+            description: "", 
+            parent_step_id: sourceParentStepId,
+            ...nodeInteractionData 
+          },
         }
         setNodes((ns) => ns.concat(newNode))
         setEdges((es) => addEdge({ id: crypto.randomUUID(), source: connectFrom.nodeId, sourceHandle: "right", target: id, targetHandle: "left" }, es))
@@ -210,7 +235,7 @@ export default function ProcessFlowPage() {
       }
       setConnectFrom(null)
     },
-    [connectFrom, nodeInteractionData, setEdges, setNodes]
+    [connectFrom, nodeInteractionData, setEdges, setNodes, nodes]
   )
 
   const fetchData = useCallback(async () => {
@@ -237,7 +262,12 @@ export default function ProcessFlowPage() {
           id: r.id,
           type: "process",
           position: pos,
-          data: { label: r.name, description: r.description, ...nodeInteractionData },
+          data: { 
+            label: r.name, 
+            description: r.description, 
+            parent_step_id: r.parent_step_id,
+            ...nodeInteractionData 
+          },
         }
       })
 
@@ -266,7 +296,17 @@ export default function ProcessFlowPage() {
   const addNode = useCallback(() => {
     const id = crypto.randomUUID()
     const pos = rfRef.current?.project({ x: 200, y: 200 }) || { x: 200, y: 200 }
-    const newNode: Node<ProcessNodeData> = { id, type: "process", position: pos, data: { label: "New Step", description: "", ...nodeInteractionData } }
+    const newNode: Node<ProcessNodeData> = { 
+      id, 
+      type: "process", 
+      position: pos, 
+      data: { 
+        label: "New Step", 
+        description: "", 
+        parent_step_id: null,
+        ...nodeInteractionData 
+      } 
+    }
     setNodes((ns) => ns.concat(newNode))
     setDirty(true)
   }, [nodeInteractionData])
@@ -310,24 +350,35 @@ export default function ProcessFlowPage() {
       const deletedNodeIds = Array.from(originalNodeIds).filter((id) => !currentNodeIds.has(id))
       const deletedEdgeIds = Array.from(originalEdgeIds).filter((id) => !currentEdgeIds.has(id))
 
-      // Upserts
-      const stepRows: StepRow[] = nodes.map((n) => ({
-        id: n.id,
-        organisation_id: selectedOrgId,
-        name: String((n.data as any)?.label ?? ""),
-        description: ((n.data as any)?.description ?? null) as string | null,
-        metadata: { position: n.position },
-        parent_step_id: null,
-      }))
+      // Upserts - Filter out nodes that still have "New Step" placeholder
+      const stepRows: StepRow[] = nodes
+        .filter((n) => (n.data as any)?.label !== "New Step") // Don't save placeholder nodes
+        .map((n) => ({
+          id: n.id,
+          organisation_id: selectedOrgId,
+          name: String((n.data as any)?.label ?? ""),
+          description: ((n.data as any)?.description ?? null) as string | null,
+          metadata: { position: n.position },
+          parent_step_id: (n.data as any)?.parent_step_id ?? null,
+        }))
 
-      const edgeRows: EdgeRow[] = edges.map((e) => ({
-        id: e.id,
-        organisation_id: selectedOrgId,
-        from_step_id: e.source,
-        to_step_id: e.target,
-        metadata: {},
-        label: (e.label as string) ?? null,
-      }))
+      // Filter valid node IDs (excluding placeholder nodes)
+      const validNodeIds = new Set(
+        nodes
+          .filter((n) => (n.data as any)?.label !== "New Step")
+          .map((n) => n.id)
+      )
+
+      const edgeRows: EdgeRow[] = edges
+        .filter((e) => validNodeIds.has(e.source) && validNodeIds.has(e.target)) // Only edges between valid nodes
+        .map((e) => ({
+          id: e.id,
+          organisation_id: selectedOrgId,
+          from_step_id: e.source,
+          to_step_id: e.target,
+          metadata: {},
+          label: (e.label as string) ?? null,
+        }))
 
       // Persist nodes and edges
       const [{ error: stepUpsertErr }, { error: edgeUpsertErr }] = await Promise.all([
@@ -474,8 +525,11 @@ export default function ProcessFlowPage() {
               <button
                 className="px-3 py-1.5 rounded bg-blue-600 text-white"
                 onClick={() => {
+                  // If the user leaves the label empty, keep "New Step" as placeholder
+                  const finalLabel = editDlg.label.trim() || "New Step"
+                  
                   setNodes((ns) =>
-                    ns.map((n) => (n.id === editDlg.id ? { ...n, data: { ...(n.data as any), label: editDlg.label, description: editDlg.description, ...nodeInteractionData } } : n))
+                    ns.map((n) => (n.id === editDlg.id ? { ...n, data: { ...(n.data as any), label: finalLabel, description: editDlg.description, ...nodeInteractionData } } : n))
                   )
                   setEditDlg(null)
                   setDirty(true)
