@@ -23,12 +23,14 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import ELK from 'elkjs/lib/elk.bundled.js'
+import ElectronEdge from './ElectronEdge'
 
 // Custom editable node for process steps
 type StepNodeData = { label: string; description?: string; editing?: boolean; onChange?: (name: string, desc: string) => void }
 function StepNode(props: any) {
   const data = (props?.data || {}) as StepNodeData
   const { label, description, editing, onChange } = data
+  const animate = (props?.data as any)?.animate as boolean | undefined
   // Auto-expand description textarea when edit mode starts
   const descRef = React.useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => {
@@ -38,43 +40,79 @@ function StepNode(props: any) {
       el.style.height = `${el.scrollHeight}px`
     }
   }, [editing, description])
+
   if (editing) {
     return (
-  <div className="w-full h-full p-2 flex flex-col gap-2" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-        <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
-        <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
-        <input
-          defaultValue={label}
-          onChange={(e) => onChange && onChange(e.target.value, description || '')}
-          placeholder="Name"
-          className="bg-gray-900 text-gray-100 border border-gray-700 rounded px-2 py-1 text-sm w-full"
-        />
-        <label className="text-[11px] text-gray-400">Description</label>
-        <textarea
-          ref={descRef}
-          defaultValue={description || ''}
-          onChange={(e) => onChange && onChange(label || '', e.target.value)}
-          onInput={(e) => {
-            const el = e.currentTarget as HTMLTextAreaElement
-            el.style.height = 'auto'
-            el.style.height = `${el.scrollHeight}px`
-          }}
-          placeholder="Description"
-          className="bg-gray-900 text-gray-300 border border-gray-700 rounded px-2 py-1 text-xs w-full resize-none overflow-hidden"
-          style={{ height: 'auto' }}
-        />
+      <div className="relative w-full h-full" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+        {animate && (
+          <div
+            className="pointer-events-none absolute inset-0 z-0"
+            style={{
+              background:
+                'conic-gradient(from 0deg, rgba(96,165,250,0) 0deg, rgba(96,165,250,0.95) 70deg, rgba(96,165,250,0) 120deg, rgba(96,165,250,0) 360deg)',
+              animation: 'rf-spin 3.2s linear infinite',
+              WebkitMask:
+                'radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 2px))',
+              mask: 'radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 2px))',
+              borderRadius: 12,
+            }}
+            aria-hidden
+          />
+        )}
+        <div className="relative z-10 p-2 flex flex-col gap-2">
+          <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
+          <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
+          <input
+            defaultValue={label}
+            onChange={(e) => onChange && onChange(e.target.value, description || '')}
+            placeholder="Name"
+            className="bg-gray-900 text-gray-100 border border-gray-700 rounded px-2 py-1 text-sm w-full"
+          />
+          <label className="text-[11px] text-gray-400">Description</label>
+          <textarea
+            ref={descRef}
+            defaultValue={description || ''}
+            onChange={(e) => onChange && onChange(label || '', e.target.value)}
+            onInput={(e) => {
+              const el = e.currentTarget as HTMLTextAreaElement
+              el.style.height = 'auto'
+              el.style.height = `${el.scrollHeight}px`
+            }}
+            placeholder="Description"
+            className="bg-gray-900 text-gray-300 border border-gray-700 rounded px-2 py-1 text-xs w-full resize-none overflow-hidden"
+            style={{ height: 'auto' }}
+          />
+        </div>
       </div>
     )
   }
+
   return (
-  <div className="w-full px-3 py-6 flex items-center justify-center text-center overflow-hidden">
-      <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
-      <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
-      <div
-        className="w-full text-sm font-semibold text-gray-100 whitespace-pre-wrap break-all leading-snug"
-  style={{ overflowWrap: 'anywhere' }}
-      >
-        {label || 'Step'}
+    <div className="relative w-full h-full overflow-hidden">
+      {animate && (
+        <div
+          className="pointer-events-none absolute inset-0 z-0"
+          style={{
+            background:
+              'conic-gradient(from 0deg, rgba(96,165,250,0) 0deg, rgba(96,165,250,0.95) 70deg, rgba(96,165,250,0) 120deg, rgba(96,165,250,0) 360deg)',
+            animation: 'rf-spin 3.2s linear infinite',
+            WebkitMask:
+              'radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 2px))',
+            mask: 'radial-gradient(closest-side, transparent calc(100% - 2px), #000 calc(100% - 2px))',
+            borderRadius: 12,
+          }}
+          aria-hidden
+        />
+      )}
+      <div className="relative z-10 w-full px-3 py-6 flex items-center justify-center text-center">
+        <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
+        <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
+        <div
+          className="w-full text-sm font-semibold text-gray-100 whitespace-pre-wrap break-all leading-snug"
+          style={{ overflowWrap: 'anywhere' }}
+        >
+          {label || 'Step'}
+        </div>
       </div>
     </div>
   )
@@ -97,6 +135,13 @@ interface ProcessFlowEdge {
   to_step_id: string | null
   metadata: any | null
   label: string | null
+}
+
+// Tree types for sidebar
+interface TreeItem {
+  id: string
+  name: string
+  children: TreeItem[]
 }
 
 export default function WorkflowPage() {
@@ -123,15 +168,23 @@ export default function WorkflowPage() {
     | { visible: true; x: number; y: number; edgeId: string; value: string }
   >(null)
   const connectingFromRef = React.useRef<string | null>(null)
+  // Track whether a successful connect happened to avoid creating a new node on end
+  const didConnectRef = React.useRef<boolean>(false)
   const flowRef = React.useRef<ReactFlowInstance | null>(null)
   // Keep last computed layout positions (from ELK) so we can snap nodes back after drag
   const layoutPosRef = React.useRef<Map<string, { x: number; y: number }>>(new Map())
+  // Fiber optics animation toggle
+  const [animateEdges, setAnimateEdges] = useState<boolean>(false)
   // Layout config state
   const [showConfig, setShowConfig] = useState(false)
   const [colGap, setColGap] = useState<number>(280)
   const [rowGap, setRowGap] = useState<number>(140)
   const [tempColGap, setTempColGap] = useState<string>('')
   const [tempRowGap, setTempRowGap] = useState<string>('')
+  // Sidebar and tree state
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
+  const [tree, setTree] = useState<TreeItem[]>([])
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   useEffect(() => {
     try {
       const sx = localStorage.getItem('workflow_col_gap')
@@ -260,9 +313,9 @@ export default function WorkflowPage() {
         ...e,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: '#f59e0b'
+    color: '#60a5fa'
         },
-  style: { stroke: '#f59e0b' },
+  style: { stroke: '#60a5fa' },
         label: text && text.trim().length ? text : undefined,
         labelShowBg: true,
         labelBgPadding: [2, 1] as [number, number],
@@ -286,11 +339,13 @@ export default function WorkflowPage() {
       const text = (((e as any).data?.labelText ?? (typeof (e as any).label === 'string' ? (e as any).label : '')) as string) || ''
       return {
         ...e,
+        type: 'electron',
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: '#f59e0b'
+          color: '#60a5fa'
         },
-        style: { stroke: '#f59e0b' },
+        style: { stroke: '#60a5fa' },
+        data: { ...(e as any).data, animate: animateEdges },
         label: text && text.trim().length ? text : undefined,
         labelShowBg: true,
         labelBgPadding: [2, 1] as [number, number],
@@ -304,7 +359,7 @@ export default function WorkflowPage() {
         },
       }
     })
-  }, [])
+  }, [animateEdges])
 
   // ELK auto layout: layered algorithm with spacing based on colGap/rowGap
   const elk = useMemo(() => new ELK({ defaultLayoutOptions: {} as any }), [])
@@ -357,7 +412,7 @@ export default function WorkflowPage() {
     }))
 
     // Preserve ELK positions; only style edges without changing node positions
-    const styledEdges = styleEdges(rawEdges)
+  const styledEdges = styleEdges(rawEdges)
     return { nodes: laidNodes, edges: styledEdges }
   }, [elk, colGap, rowGap, styleEdges])
 
@@ -373,6 +428,20 @@ export default function WorkflowPage() {
     })()
     return () => { cancelled = true }
   }, [colGap, rowGap])
+
+  // When animation toggle changes, restyle edges without moving nodes
+  useEffect(() => {
+    setEdges((eds) => styleEdges(eds))
+    // Also flag nodes to animate perimeter
+    setNodes((ns) => ns.map((n) => ({
+      ...n,
+      data: { ...(n.data as any), animate: animateEdges },
+      style: {
+        ...(n.style as any),
+        border: animateEdges ? '1px solid transparent' : '1px solid #1f2937'
+      }
+    })))
+  }, [animateEdges, styleEdges, setEdges])
 
   const fetchData = useCallback(async () => {
     if (!selectedOrgId) {
@@ -397,10 +466,10 @@ export default function WorkflowPage() {
 
       if (flowsErr) throw flowsErr
 
-      // Step nodes
+      // Step nodes (include parentId for tree building)
       const stepNodes: Node[] = (steps || []).map((s) => ({
         id: s.id,
-        data: { label: s.name || 'Step', description: s.description || '' },
+        data: { label: s.name || 'Step', description: s.description || '', animate: animateEdges, parentId: s.parent_step_id },
         position: { x: 0, y: 0 },
         type: 'stepNode',
         style: {
@@ -417,16 +486,45 @@ export default function WorkflowPage() {
           id: String(e.id),
           source: String(e.from_step_id),
           target: String(e.to_step_id),
-          type: 'default',
+      type: 'electron',
       // set both label (string) and store raw text so layout can style it
       label: e.label ?? undefined,
-      data: { labelText: e.label ?? '' } as any,
+    data: { labelText: e.label ?? '', animate: animateEdges } as any,
         }))
 
-  const allNodes = [...stepNodes]
+      const allNodes = [...stepNodes]
   const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, edgeList)
       setNodes(laidNodes)
       setEdges(laidEdges)
+
+      // Build tree from steps for sidebar
+      const byId: Record<string, TreeItem> = {}
+      for (const s of (steps || [])) {
+        byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
+      }
+      const roots: TreeItem[] = []
+      for (const s of (steps || [])) {
+        if (s.parent_step_id && byId[s.parent_step_id]) {
+          byId[s.parent_step_id].children.push(byId[s.id])
+        } else {
+          // No parent => hierarchy 0
+          roots.push(byId[s.id])
+        }
+      }
+      // Sort siblings by name for stable order
+      const sortTree = (items: TreeItem[]) => {
+        items.sort((a, b) => a.name.localeCompare(b.name))
+        items.forEach((it) => sortTree(it.children))
+      }
+      sortTree(roots)
+      setTree(roots)
+      // Initialize expanded with roots if empty (first load)
+      setExpanded((prev) => {
+        if (Object.keys(prev).length) return prev
+        const next: Record<string, boolean> = {}
+        for (const r of roots) next[r.id] = true
+        return next
+      })
     } catch (err: any) {
       setError(err.message || 'Failed to load workflow')
     } finally {
@@ -541,6 +639,8 @@ export default function WorkflowPage() {
   const onConnect = useCallback(async (connection: any) => {
     // Persist a new flow edge between two steps, then refresh
     try {
+  // Mark that a valid connection occurred so onConnectEnd won't create a new node
+  didConnectRef.current = true
       if (!selectedOrgId || !connection?.source || !connection?.target) return
       const { error: flowErr } = await supabase
         .from('process_flow_edge')
@@ -554,6 +654,8 @@ export default function WorkflowPage() {
       if (flowErr) throw flowErr
       await fetchData()
     } catch (e: any) {
+  // Reset flag on failure so user can retry and pane-drop works
+  didConnectRef.current = false
       setError(e.message || 'Failed to connect nodes')
     }
   }, [selectedOrgId, fetchData])
@@ -571,6 +673,11 @@ export default function WorkflowPage() {
   const onConnectEnd = useCallback(async (event: MouseEvent | TouchEvent) => {
     const sourceId = connectingFromRef.current
     connectingFromRef.current = null
+    // If a connection was made, do not create a new node
+    if (didConnectRef.current) {
+      didConnectRef.current = false
+      return
+    }
     if (!sourceId || !selectedOrgId) return
     // If there was a valid target, onConnect would have handled it; we only handle pane drops
     // Heuristic: create when the original event target is the pane or SVG backdrop
@@ -736,6 +843,17 @@ export default function WorkflowPage() {
             Fit
           </button>
           <button
+            onClick={() => setAnimateEdges((v) => !v)}
+            className="inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
+            aria-label="Toggle edge animation"
+            title="Toggle edge animation"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12l5 5L20 7" />
+            </svg>
+            {animateEdges ? 'Animate: On' : 'Animate: Off'}
+          </button>
+          <button
             onClick={() => setShowConfig(v => !v)}
             className="inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
             aria-label="Layout settings"
@@ -763,7 +881,43 @@ export default function WorkflowPage() {
       ) : isLoading ? (
         <div className="h-[calc(100vh-64px)] flex items-center justify-center text-gray-400">Loading workflow…</div>
       ) : (
-        <div className="h-[calc(100vh-64px)] relative">
+        <div className="h-[calc(100vh-64px)] flex">
+          {/* Sidebar: hierarchical index */}
+          <div className={`${sidebarOpen ? 'w-72' : 'w-8'} h-full border-r border-gray-800 bg-gray-900/60 backdrop-blur-sm transition-[width] duration-200 overflow-hidden`}>            
+            <div className="h-9 flex items-center justify-between px-2 border-b border-gray-800">
+              <div className="text-xs font-semibold text-gray-300">Index</div>
+              <button
+                className="p-1 rounded hover:bg-gray-800 text-gray-300"
+                aria-label={sidebarOpen ? 'Collapse' : 'Expand'}
+                title={sidebarOpen ? 'Collapse' : 'Expand'}
+                onClick={() => setSidebarOpen((v) => !v)}
+              >
+                {sidebarOpen ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M12.78 15.28a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 1 1 1.06 1.06L8.56 10l4.22 4.22a.75.75 0 0 1 0 1.06Z" clipRule="evenodd"/></svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M7.22 4.72a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L11.44 10 7.22 5.78a.75.75 0 0 1 0-1.06Z" clipRule="evenodd"/></svg>
+                )}
+              </button>
+            </div>
+            {sidebarOpen && (
+              <div className="h-[calc(100%-36px)] overflow-auto py-2">
+        <SidebarTree
+                  roots={tree}
+                  expanded={expanded}
+                  onToggle={(id) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))}
+                  onSelect={(id) => {
+                    // Select and focus node in canvas
+                    setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })))
+          const instance = flowRef.current
+          const node = nodes.find((n) => n.id === id)
+          if (instance && node) instance.fitView({ nodes: [node as any], padding: 0.2, duration: 500 })
+                  }}
+                />
+              </div>
+            )}
+          </div>
+          {/* Main canvas area */}
+          <div className="flex-1 relative">
           {showConfig && (
             <div ref={configRef} className="absolute top-2 right-4 z-50 min-w-64 rounded-md border border-gray-700 bg-gray-900 text-gray-100 shadow-lg p-3">
               <div className="text-sm font-medium mb-2">Layout</div>
@@ -841,6 +995,7 @@ export default function WorkflowPage() {
             onEdgeContextMenu={(e, ed) => openEdgeMenu(e, String(ed.id))}
             onPaneContextMenu={(e) => { e.preventDefault(); closeMenu() }}
             nodeTypes={{ stepNode: StepNode }}
+            edgeTypes={{ electron: ElectronEdge }}
             onInit={(instance) => { flowRef.current = instance }}
             fitView
           >
@@ -918,6 +1073,64 @@ export default function WorkflowPage() {
               />
             </div>
           )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Sidebar tree components
+function SidebarTree({ roots, expanded, onToggle, onSelect }: { roots: TreeItem[]; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void }) {
+  return (
+    <div className="px-2">
+      {roots.length === 0 ? (
+        <div className="text-xs text-gray-500 px-2 py-2">No steps</div>
+      ) : (
+        roots.map((r) => (
+          <TreeRow key={r.id} item={r} level={0} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+        ))
+      )}
+    </div>
+  )
+}
+
+function TreeRow({ item, level, expanded, onToggle, onSelect }: { item: TreeItem; level: number; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void }) {
+  const hasChildren = item.children.length > 0
+  const isOpen = expanded[item.id]
+  return (
+    <div className="select-none">
+      <div className="flex items-center gap-1 py-1"
+        style={{ paddingLeft: 8 + level * 12 }}
+      >
+        {hasChildren ? (
+          <button
+            className="p-0.5 rounded hover:bg-gray-800 text-gray-300"
+            onClick={() => onToggle(item.id)}
+            aria-label={isOpen ? 'Collapse' : 'Expand'}
+          >
+            {isOpen ? (
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5"><path fillRule="evenodd" d="M5.22 7.22a.75.75 0 0 1 1.06 0L10 10.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd"/></svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5"><path fillRule="evenodd" d="M7.22 5.22a.75.75 0 0 1 1.06 0l3.72 3.72-3.72 3.72a.75.75 0 1 1-1.06-1.06L9.94 10 7.22 7.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd"/></svg>
+            )}
+          </button>
+        ) : (
+          <span className="inline-block h-1 w-1 rounded-full bg-gray-600 ml-1" />
+        )}
+        <button
+          onClick={() => onSelect(item.id)}
+          className="truncate text-left text-xs text-gray-200 hover:text-yellow-300"
+          title={item.name}
+        >
+          {item.name}
+        </button>
+      </div>
+      {hasChildren && isOpen && (
+        <div>
+          {item.children.map((c) => (
+            <TreeRow key={c.id} item={c} level={level + 1} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+          ))}
         </div>
       )}
     </div>

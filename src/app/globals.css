@@ -109,3 +109,34 @@ body {
     stroke-dashoffset: calc(-1 * var(--edge-len, 300px));
   }
 }
+
+/* Fiber optic edges: glowing moving pulses when animated */
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke: #f59e0b;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 6 10; /* dot-like pulses spaced out */
+  filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.8)) drop-shadow(0 0 6px rgba(245, 158, 11, 0.6));
+  animation: fiberDash 1.2s linear infinite;
+}
+
+/* Subtler base look for non-animated state */
+.react-flow__edge-path {
+  stroke-linecap: round;
+}
+
+@keyframes fiberDash {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -200; }
+}
+
+/* Make label backdrop not overpower the glow */
+.react-flow__edge-textbg {
+  opacity: 0.9;
+}
+
+/* Spin used for node perimeter conic-gradient ring */
+@keyframes rf-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
