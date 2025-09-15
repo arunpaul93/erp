@@ -43,6 +43,16 @@
 			"command": "npm run dev",
 			"isBackground": true,
 			"group": "build"
+		},
+		{
+			"label": "npm: install-elk",
+			"type": "shell",
+			"command": "npm i elkjs",
+			"isBackground": false,
+			"problemMatcher": [
+				"$eslint - stylish"
+			],
+			"group": "build"
 		}
 	]
 }

@@ -18,7 +18,7 @@ import ReactFlow, {
   OnConnectStart,
 } from "reactflow"
 import "reactflow/dist/style.css"
-import dagre from "@dagrejs/dagre"
+import ELK from "elkjs/lib/elk.bundled.js"
 import { supabase } from "@/lib/supabase"
 import { useOrg } from "@/contexts/OrgContext"
 
@@ -90,27 +90,37 @@ type EditDialogState = {
   description: string
 } | null
 
-function layoutWithDagre(nodes: Node[], edges: Edge[], opts: { ranksep: number; nodesep: number; marginx: number; marginy: number; direction: "LR" | "TB" }) {
-  const g = new dagre.graphlib.Graph()
-  g.setGraph({ ranksep: opts.ranksep, nodesep: opts.nodesep, marginx: opts.marginx, marginy: opts.marginy, rankdir: opts.direction })
-  g.setDefaultEdgeLabel(() => ({}))
+async function layoutWithElk(nodes: Node[], edges: Edge[], opts: { ranksep: number; nodesep: number; marginx: number; marginy: number; direction: "LR" | "TB" }) {
+  const elk = new ELK()
+  const direction = opts.direction === "LR" ? "RIGHT" : "DOWN"
+  const graph: any = {
+    id: "root",
+    layoutOptions: {
+      "elk.algorithm": "layered",
+      "elk.direction": direction,
+      "elk.layered.spacing.nodeNodeBetweenLayers": String(opts.ranksep),
+      "elk.spacing.nodeNode": String(opts.nodesep),
+      "elk.padding.top": String(opts.marginy),
+      "elk.padding.bottom": String(opts.marginy),
+      "elk.padding.left": String(opts.marginx),
+      "elk.padding.right": String(opts.marginx),
+    },
+    children: nodes.map((n) => ({ id: n.id, width: NODE_DEFAULT_WIDTH, height: NODE_DEFAULT_HEIGHT })),
+    edges: edges.map((e) => ({ id: e.id, sources: [e.source], targets: [e.target] })),
+  }
 
-  nodes.forEach((n) => {
-    const width = NODE_DEFAULT_WIDTH
-    const height = NODE_DEFAULT_HEIGHT
-    g.setNode(n.id, { width, height })
-  })
-  edges.forEach((e) => g.setEdge(e.source, e.target))
-
-  dagre.layout(g)
-
-  const nextNodes = nodes.map((n) => {
-    const nodeWithPosition = g.node(n.id)
-    return {
-      ...n,
-      position: { x: nodeWithPosition.x - NODE_DEFAULT_WIDTH / 2, y: nodeWithPosition.y - NODE_DEFAULT_HEIGHT / 2 },
+  const res = await elk.layout(graph)
+  const positions: Record<string, { x: number; y: number }> = {}
+  if (res.children) {
+    for (const c of res.children) {
+      positions[c.id] = { x: c.x ?? 0, y: c.y ?? 0 }
     }
-  })
+  }
+
+  const nextNodes = nodes.map((n) => ({
+    ...n,
+    position: positions[n.id] ?? n.position,
+  }))
 
   return nextNodes
 }
@@ -261,8 +271,8 @@ export default function ProcessFlowPage() {
     setDirty(true)
   }, [nodeInteractionData])
 
-  const layout = useCallback(() => {
-    const laidOut = layoutWithDagre(nodes, edges, { ranksep, nodesep, marginx: paddingX, marginy: paddingY, direction: "LR" })
+  const layout = useCallback(async () => {
+    const laidOut = await layoutWithElk(nodes, edges, { ranksep, nodesep, marginx: paddingX, marginy: paddingY, direction: "LR" })
     setNodes(laidOut)
     setDirty(true)
   }, [edges, nodes, paddingX, paddingY, ranksep, nodesep])
