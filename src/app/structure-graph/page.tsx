@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import { supabase } from '@/lib/supabase'
 import * as d3 from 'd3-force'
+import ELK from 'elkjs/lib/elk.bundled.js'
 import { select as d3Select, Selection } from 'd3-selection'
 import { drag as d3Drag } from 'd3-drag'
 import { zoom as d3Zoom } from 'd3-zoom'
@@ -106,7 +107,6 @@ const EDGE_COLORS = {
     'Created By': '#f472b6', // pink-400
 
     // Operational relationships
-    'Process Flow': '#0ea5e9', // sky-500
     'Workflow': '#8b5cf6', // purple-500
     'Task Assignment': '#22c55e', // green-500
     'Resource Allocation': '#f59e0b', // amber-500
@@ -192,12 +192,18 @@ export default function StructureGraphPage() {
     const router = useRouter()
     const svgRef = useRef<SVGSVGElement>(null)
     const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null)
+    const linkSelRef = useRef<Selection<SVGLineElement, GraphLink, SVGGElement, unknown> | null>(null)
+    const linkLabelSelRef = useRef<Selection<SVGTextElement, GraphLink, SVGGElement, unknown> | null>(null)
+    const nodeSelRef = useRef<Selection<SVGGElement, GraphNode, SVGGElement, unknown> | null>(null)
+    const zoomRef = useRef<any>(null)
+    const currentTransformRef = useRef<any>(null)
     const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] })
     const [isLoading, setIsLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [dimensions, setDimensions] = useState({ width: 800, height: 600 })
     const [availableEdgeTypes, setAvailableEdgeTypes] = useState<string[]>([])
     const [visibleEdgeTypes, setVisibleEdgeTypes] = useState<Set<string>>(new Set())
+    const [isElkLayoutting, setIsElkLayoutting] = useState(false)
     const [visibleNodeTypes, setVisibleNodeTypes] = useState<Set<string>>(new Set())
     const [selectedLinkIds, setSelectedLinkIds] = useState<Set<string>>(new Set())
     const [showLegend, setShowLegend] = useState(true)
@@ -218,11 +224,6 @@ export default function StructureGraphPage() {
     })
 
     // Refs to D3 selections for incremental updates
-    const zoomRef = useRef<any>(null)
-    const currentTransformRef = useRef<any>(null)
-    const linkSelRef = useRef<Selection<SVGLineElement, GraphLink, SVGGElement, unknown> | null>(null)
-    const linkLabelSelRef = useRef<Selection<SVGTextElement, GraphLink, SVGGElement, unknown> | null>(null)
-    const nodeSelRef = useRef<Selection<SVGGElement, GraphNode, SVGGElement, unknown> | null>(null)
 
     // Derived: dynamic node types present in current graph
     const nodeTypeStats = useMemo(() => {
@@ -401,6 +402,132 @@ export default function StructureGraphPage() {
         console.log('StructureGraph: selectedOrgId changed to:', selectedOrgId)
     }, [selectedOrgId])
 
+    // Helpers for ELK auto layout
+    const measureNodeSizes = useCallback(() => {
+        const sizes: Record<string, { width: number; height: number }> = {}
+        if (!nodeSelRef.current) return sizes
+        try {
+            nodeSelRef.current.each(function (d: any) {
+                const g = this as SVGGElement
+                const bbox = g.getBBox()
+                const id = (d as GraphNode).id
+                sizes[id] = {
+                    width: Math.max(bbox.width, (d as GraphNode).size * 2 + 24),
+                    height: Math.max(bbox.height, (d as GraphNode).size * 2 + 28),
+                }
+            })
+        } catch (e) {
+            // fallback sizes if getBBox fails
+            graphData.nodes.forEach(n => {
+                sizes[n.id] = { width: n.size * 2 + 24, height: n.size * 2 + 28 }
+            })
+        }
+        return sizes
+    }, [graphData.nodes])
+
+    const getVisibleGraph = useCallback(() => {
+        const nodeVisible = (nodeId: string) => {
+            const n = nodeById.get(nodeId)
+            return !!n && visibleNodeTypes.has(n.type)
+        }
+        const filteredLinks = graphData.links.filter(link => {
+            const srcId = typeof link.source === 'string' ? link.source : link.source.id
+            const tgtId = typeof link.target === 'string' ? link.target : link.target.id
+            return visibleEdgeTypes.has(link.type) && nodeVisible(srcId) && nodeVisible(tgtId)
+        })
+        const visibleNodes = graphData.nodes.filter(n => visibleNodeTypes.has(n.type))
+        return { visibleNodes, filteredLinks }
+    }, [graphData, nodeById, visibleEdgeTypes, visibleNodeTypes])
+
+    const runElkLayout = useCallback(async (direction: 'LR' | 'TB' = 'LR') => {
+        const { visibleNodes, filteredLinks } = getVisibleGraph()
+        if (visibleNodes.length === 0) return
+        setIsElkLayoutting(true)
+        try {
+            // Stop physics so it doesn't fight the layout
+            simulationRef.current?.stop()
+
+            const sizes = measureNodeSizes()
+            const elk = new ELK()
+            const elkDir = direction === 'LR' ? 'RIGHT' : 'DOWN'
+            const graph: any = {
+                id: 'root',
+                layoutOptions: {
+                    'elk.algorithm': 'layered',
+                    'elk.direction': elkDir,
+                    'elk.layered.spacing.nodeNodeBetweenLayers': '280',
+                    'elk.spacing.nodeNode': '140',
+                    'elk.spacing.edgeNode': '60',
+                    'elk.spacing.edgeEdge': '40',
+                    'elk.alignment': 'CENTER',
+                    'elk.padding.top': '80',
+                    'elk.padding.bottom': '80',
+                    'elk.padding.left': '120',
+                    'elk.padding.right': '120',
+                },
+                children: visibleNodes.map(n => ({ id: n.id, width: sizes[n.id]?.width || n.size * 3, height: sizes[n.id]?.height || n.size * 3 })),
+                edges: filteredLinks.map(l => ({ id: l.data.id, sources: [typeof l.source === 'string' ? l.source : (l.source as GraphNode).id], targets: [typeof l.target === 'string' ? l.target : (l.target as GraphNode).id] })),
+            }
+            const res = await elk.layout(graph)
+            const pos: Record<string, { x: number; y: number }> = {}
+            for (const c of res.children || []) pos[c.id] = { x: c.x || 0, y: c.y || 0 }
+
+            // Apply positions to data bound nodes
+            const idToNode = new Map(graphData.nodes.map(n => [n.id, n]))
+            Object.entries(pos).forEach(([id, p]) => {
+                const n = idToNode.get(id)
+                if (n) {
+                    n.x = p.x
+                    n.y = p.y
+                    n.fx = p.x
+                    n.fy = p.y
+                }
+            })
+
+            // Update DOM positions
+            if (nodeSelRef.current) {
+                nodeSelRef.current
+                    .attr('transform', (d: any) => `translate(${(d as GraphNode).x || 0},${(d as GraphNode).y || 0})`)
+            }
+            if (linkSelRef.current) {
+                linkSelRef.current
+                    .attr('x1', (d: any) => {
+                        const s = (typeof d.source === 'string' ? nodeById.get(d.source) : d.source) as GraphNode
+                        return s?.x || 0
+                    })
+                    .attr('y1', (d: any) => {
+                        const s = (typeof d.source === 'string' ? nodeById.get(d.source) : d.source) as GraphNode
+                        return s?.y || 0
+                    })
+                    .attr('x2', (d: any) => {
+                        const t = (typeof d.target === 'string' ? nodeById.get(d.target) : d.target) as GraphNode
+                        return t?.x || 0
+                    })
+                    .attr('y2', (d: any) => {
+                        const t = (typeof d.target === 'string' ? nodeById.get(d.target) : d.target) as GraphNode
+                        return t?.y || 0
+                    })
+            }
+            if (linkLabelSelRef.current) {
+                linkLabelSelRef.current
+                    .attr('x', (d: any) => {
+                        const s = (typeof d.source === 'string' ? nodeById.get(d.source) : d.source) as GraphNode
+                        const t = (typeof d.target === 'string' ? nodeById.get(d.target) : d.target) as GraphNode
+                        return ((s?.x || 0) + (t?.x || 0)) / 2
+                    })
+                    .attr('y', (d: any) => {
+                        const s = (typeof d.source === 'string' ? nodeById.get(d.source) : d.source) as GraphNode
+                        const t = (typeof d.target === 'string' ? nodeById.get(d.target) : d.target) as GraphNode
+                        return ((s?.y || 0) + (t?.y || 0)) / 2
+                    })
+            }
+        } catch (e) {
+            console.error('ELK layout failed', e)
+        } finally {
+            setIsElkLayoutting(false)
+        }
+    }, [graphData, nodeById, visibleEdgeTypes, visibleNodeTypes, measureNodeSizes, getVisibleGraph])
+
     // D3 Force Simulation
     useEffect(() => {
         if (!graphData.nodes.length || !svgRef.current) return
@@ -545,8 +672,8 @@ export default function StructureGraphPage() {
             .style('pointer-events', 'none')
 
         // cache selections for later incremental updates
-        linkSelRef.current = link as unknown as Selection<SVGLineElement, GraphLink, SVGGElement, unknown>
-        linkLabelSelRef.current = linkLabels as unknown as Selection<SVGTextElement, GraphLink, SVGGElement, unknown>
+    linkSelRef.current = link as unknown as Selection<SVGLineElement, GraphLink, SVGGElement, unknown>
+    linkLabelSelRef.current = linkLabels as unknown as Selection<SVGTextElement, GraphLink, SVGGElement, unknown>
 
         // Create nodes - create ALL nodes, handle visibility separately
         const node = container.append('g')
@@ -559,7 +686,7 @@ export default function StructureGraphPage() {
             .style('display', (d: GraphNode) => visibleNodeTypes.has(d.type) ? null : 'none') // Set initial visibility
 
         // Cache node selection for incremental updates
-        nodeSelRef.current = node as unknown as Selection<SVGGElement, GraphNode, SVGGElement, unknown>
+    nodeSelRef.current = node as unknown as Selection<SVGGElement, GraphNode, SVGGElement, unknown>
 
         node.call(d3Drag<SVGGElement, GraphNode>()
             .on('start', (event, d) => {
@@ -800,6 +927,13 @@ export default function StructureGraphPage() {
                             </button>
                         </div>
                         <div className="flex items-center space-x-4">
+                            <button
+                                onClick={() => runElkLayout('LR')}
+                                className="bg-emerald-500 hover:bg-emerald-600 text-white px-3 py-1 rounded text-sm font-medium disabled:opacity-60"
+                                disabled={isElkLayoutting}
+                            >
+                                {isElkLayoutting ? 'Layout…' : 'Auto Layout'}
+                            </button>
                             <button
                                 onClick={fetchStructureData}
                                 className="bg-yellow-400 hover:bg-yellow-500 text-gray-900 px-3 py-1 rounded text-sm font-medium"
