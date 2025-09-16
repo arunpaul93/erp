@@ -384,7 +384,12 @@ export default function WorkflowPage() {
                 'elk.direction': 'RIGHT',
                 'elk.spacing.nodeNodeBetweenLayers': String(colGap),
                 'elk.layered.spacing.nodeNodeBetweenLayers': String(colGap),
-                'elk.spacing.nodeNode': String(Math.max(40, rowGap - 40)),
+                // Vertical spacing within a layer (rows)
+                'elk.spacing.nodeNode': String(rowGap),
+                // Keep separate components/flows apart vertically as well
+                'elk.spacing.componentComponent': String(rowGap),
+                // Base value to propagate spacing to related measures
+                'elk.layered.spacing.baseValue': String(rowGap),
                 'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
                 'elk.layered.crossingMinimization.semiInteractive': 'true',
             },
