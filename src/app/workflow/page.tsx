@@ -1796,7 +1796,13 @@ export default function WorkflowPage() {
                                             // Exclude self and descendants to prevent cycles
                                             const targetId = reparentPicker.nodeId
                                             const parentById = new Map<string, string | null>()
-                                            nodes.forEach(n => { if (n.type === 'stepNode') parentById.set(String(n.id), ((n.data as any)?.parentId ?? null) as any) })
+                                            const labelById = new Map<string, string>()
+                                            nodes.forEach(n => {
+                                                if (n.type === 'stepNode') {
+                                                    parentById.set(String(n.id), (((n.data as any)?.parentId ?? null) as any))
+                                                    labelById.set(String(n.id), String(((n.data as any)?.label || 'Step')))
+                                                }
+                                            })
                                             const descendants = new Set<string>()
                                             const stack = [targetId]
                                             while (stack.length) {
@@ -1809,12 +1815,31 @@ export default function WorkflowPage() {
                                                 }
                                             }
                                             const disallowed = new Set<string>([targetId, ...Array.from(descendants)])
+                                            const buildPath = (id: string): string => {
+                                                const parts: string[] = []
+                                                let cur: string | null = id
+                                                while (cur) {
+                                                    parts.push(labelById.get(cur) || 'Step')
+                                                    cur = parentById.get(cur) || null
+                                                }
+                                                // Format: node < parent < grandparent
+                                                return parts.join(' < ')
+                                            }
+                                            const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '').replace(/>/g, '<')
+                                            const qRaw = reparentPicker.query.toLowerCase().trim()
+                                            const qNorm = normalize(reparentPicker.query)
                                             return nodes
                                                 .filter(n => n.type === 'stepNode' && !disallowed.has(String(n.id)))
-                                                .filter(n => (n.data as any)?.label?.toLowerCase()?.includes(reparentPicker.query.toLowerCase()))
-                                                .map(n => (
+                                                .map(n => ({ n, path: buildPath(String(n.id)) }))
+                                                .filter(x => {
+                                                    const pLower = x.path.toLowerCase()
+                                                    const pNorm = normalize(x.path)
+                                                    return !qRaw || pLower.includes(qRaw) || pNorm.includes(qNorm)
+                                                })
+                                                .map(({ n, path }) => (
                                                     <button key={n.id}
                                                         className="w-full text-left px-2 py-1 hover:bg-gray-800 text-gray-200"
+                                                        title={path}
                                                         onClick={() => {
                                                             let nextNodes: Node[] = []
                                                             setNodes(ns => {
@@ -1828,7 +1853,7 @@ export default function WorkflowPage() {
                                                             closeReparentPicker()
                                                         }}
                                                     >
-                                                        {(n.data as any)?.label || 'Step'}
+                                                        {path}
                                                     </button>
                                                 ))
                                         })()}
