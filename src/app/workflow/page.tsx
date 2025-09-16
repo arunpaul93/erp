@@ -1032,17 +1032,27 @@ export default function WorkflowPage() {
         if (entries.length === 0 && edgeEntries.length === 0 && nodeDeletes.length === 0 && edgeDeletes.length === 0) return
         setIsSaving(true)
         try {
-            // Build upsert payload for process_step
+            // Build upsert payload for process_step (omit undefined fields; ensure name if present is non-empty)
+            const labelById = new Map<string, string>()
+            nodes.forEach(n => { if (n.type === 'stepNode') labelById.set(String(n.id), String(((n.data as any)?.label || 'Untitled'))) })
             const payload = entries
                 .filter(([id]) => !id.startsWith('flow-'))
                 .filter(([id]) => !pendingNodeDeletes[id]) // skip nodes being deleted
-                .map(([id, val]) => ({
-                    id,
-                    name: val.name ?? undefined,
-                    description: val.description ?? undefined,
-                    // Include parent change if present (can be null)
-                    parent_step_id: (Object.prototype.hasOwnProperty.call(val, 'parentId') ? (val.parentId as any) : undefined),
-                }))
+                .map(([id, val]) => {
+                    const row: any = { id }
+                    // Always include a non-null name to satisfy NOT NULL even if only parent changes
+                    const currentLabel = (labelById.get(String(id)) || 'Untitled')
+                    const proposed = Object.prototype.hasOwnProperty.call(val, 'name') ? (val.name ?? '').toString().trim() : ''
+                    row.name = proposed.length ? proposed : currentLabel
+                    if (Object.prototype.hasOwnProperty.call(val, 'description')) {
+                        row.description = (val.description ?? '')
+                    }
+                    if (Object.prototype.hasOwnProperty.call(val, 'parentId')) {
+                        row.parent_step_id = (val.parentId as any)
+                    }
+                    return row
+                })
+                .filter(row => Object.keys(row).length > 1) // ensure we don't send rows with only id
             if (payload.length > 0) {
                 const { error: upsertErr } = await supabase
                     .from('process_step')
