@@ -290,8 +290,8 @@ export default function WorkflowPage() {
 
         const xGap = colGap
         const yGap = rowGap
-    const nodeW = 220
-    const nodeH = 80
+        const nodeW = 220
+        const nodeH = 80
 
         const laidOut = rawNodes.map((n) => {
             const l = level.get(n.id) ?? 0
@@ -377,7 +377,7 @@ export default function WorkflowPage() {
     const elk = useMemo(() => new ELK({ defaultLayoutOptions: {} as any }), [])
     const applyElkLayout = useCallback(async (rawNodes: Node[], rawEdges: Edge[]): Promise<{ nodes: Node[]; edges: Edge[] }> => {
         // Build ELK graph
-    const elkGraph: any = {
+        const elkGraph: any = {
             id: 'root',
             layoutOptions: {
                 'elk.algorithm': 'layered',
@@ -447,13 +447,13 @@ export default function WorkflowPage() {
         if (sig === layoutSigRef.current) return
         layoutSigRef.current = sig
         let cancelled = false
-        ;(async () => {
-            const { nodes: n, edges: e } = await applyElkLayout(nodes, edges)
-            if (!cancelled) {
-                setNodes(n)
-                setEdges(e)
-            }
-        })()
+            ; (async () => {
+                const { nodes: n, edges: e } = await applyElkLayout(nodes, edges)
+                if (!cancelled) {
+                    setNodes(n)
+                    setEdges(e)
+                }
+            })()
         return () => { cancelled = true }
     }, [nodes, edges, computeTopologySignature, applyElkLayout])
 
@@ -533,7 +533,7 @@ export default function WorkflowPage() {
             }
             const sortTree = (items: TreeItem[]) => { items.sort((a, b) => a.name.localeCompare(b.name)); items.forEach((it) => sortTree(it.children)) }
             sortTree(roots)
-        setTree(roots)
+            setTree(roots)
             // Initialize expanded with filtered roots if empty (first load)
             setExpanded((prev) => {
                 if (Object.keys(prev).length) return prev
@@ -704,12 +704,12 @@ export default function WorkflowPage() {
                     .in('id', nodeDeletes as any)
                 if (delNodesErr) throw delNodesErr
             }
-        // Clear local dirty flags; graph is already up-to-date locally (soft-deletes applied earlier)
-        setDirtyEdits({})
-        setEdgeDirtyEdits({})
-        setPendingNodeDeletes({})
-        setPendingEdgeDeletes({})
-        setEditingNodeId(null)
+            // Clear local dirty flags; graph is already up-to-date locally (soft-deletes applied earlier)
+            setDirtyEdits({})
+            setEdgeDirtyEdits({})
+            setPendingNodeDeletes({})
+            setPendingEdgeDeletes({})
+            setEditingNodeId(null)
         } catch (e: any) {
             setError(e.message || 'Failed to save changes')
         } finally {
@@ -1039,7 +1039,7 @@ export default function WorkflowPage() {
                         </div>
                         {sidebarOpen && (
                             <div className="h-[calc(100%-36px)] overflow-auto py-2">
-                {/* Company name as first item */}
+                                {/* Company name as first item */}
                                 <div className="px-2 mb-1">
                                     <button
                                         type="button"
