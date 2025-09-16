@@ -299,6 +299,28 @@ export default function WorkflowPage() {
         } catch { /* no-op */ }
     }, [router, pathname, searchParams])
 
+    // Arrange nodes in a grid layout (for organization view)
+    const arrangeInGrid = useCallback((nodes: Node[], gap: number = 300): Node[] => {
+        const visibleNodes = nodes.filter(n => !(n as any).hidden)
+        const gridSize = Math.ceil(Math.sqrt(visibleNodes.length))
+        
+        return nodes.map(node => {
+            if ((node as any).hidden) return node
+            
+            const index = visibleNodes.findIndex(n => n.id === node.id)
+            const row = Math.floor(index / gridSize)
+            const col = index % gridSize
+            
+            return {
+                ...node,
+                position: {
+                    x: col * gap,
+                    y: row * gap
+                }
+            }
+        })
+    }, [])
+
     // Show only direct children (nodes whose parent_step_id matches given id)
     const showChildrenOf = useCallback((parentId: string) => {
         setNodes((ns) => {
@@ -345,7 +367,7 @@ export default function WorkflowPage() {
         })
     }, [setNodes, setEdges])
 
-    // Show only root nodes (parent_step_id is null) by querying backend, hide others, and fit view
+    // Show only root nodes (parent_step_id is null) by querying backend, hide others, arrange in grid, and fit view
     const showRootNodesOnly = useCallback(async () => {
         if (!selectedOrgId) return
         try {
@@ -356,10 +378,13 @@ export default function WorkflowPage() {
                 .is('parent_step_id', null)
             if (rootsErr) throw rootsErr
             const rootIds = new Set<string>((roots || []).map((r: any) => String(r.id)))
-            setNodes((ns) => ns.map((n) => ({
+            let updatedNodes = nodes.map((n) => ({
                 ...n,
                 hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
-            })))
+            }))
+            // Apply grid layout to visible root nodes
+            updatedNodes = arrangeInGrid(updatedNodes, Math.max(colGap, 300))
+            setNodes(updatedNodes)
             setEdges((es) => es.map((e) => ({
                 ...e,
                 hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
@@ -368,7 +393,7 @@ export default function WorkflowPage() {
         } catch (e: any) {
             setError(e.message || 'Failed to filter root nodes')
         }
-    }, [selectedOrgId, setNodes, setEdges])
+    }, [selectedOrgId, setNodes, setEdges, nodes, arrangeInGrid, colGap])
 
     // Simple fit helpers only
     const fitAll = useCallback(() => flowRef.current?.fitView({ padding: 0.15, duration: 0 }), [])
@@ -700,7 +725,7 @@ export default function WorkflowPage() {
                     hidden: !(childIds.has(String(e.source)) && childIds.has(String(e.target)))
                 }))
             } else {
-                // Filter to root nodes (null parent_step_id) by default
+                // Filter to root nodes (null parent_step_id) by default and arrange in grid
                 const rootIds = new Set<string>((steps || [])
                     .filter((s) => !s.parent_step_id)
                     .map((s) => String(s.id))
@@ -713,6 +738,9 @@ export default function WorkflowPage() {
                     ...e,
                     hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
                 }))
+                
+                // Apply grid layout to root nodes
+                finalNodes = arrangeInGrid(finalNodes, Math.max(colGap, 300))
             }
             
             setNodes(finalNodes)
