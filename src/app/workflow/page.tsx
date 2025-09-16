@@ -677,9 +677,47 @@ export default function WorkflowPage() {
 
             const allNodes = [...stepNodes]
             const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, edgeList)
-            setNodes(laidNodes)
-            setEdges(laidEdges)
-            layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
+            
+            // Apply initial filtering based on URL before setting nodes
+            const parentId = searchParams?.get('parent')
+            let finalNodes = laidNodes
+            let finalEdges = laidEdges
+            
+            if (parentId) {
+                // Filter to children of specific parent
+                const childIds = new Set<string>(
+                    laidNodes
+                        .filter((n) => n.type === 'stepNode' && String((n.data as any)?.parentId || '') === String(parentId))
+                        .map((n) => String(n.id))
+                )
+                finalNodes = laidNodes.map((n) => ({
+                    ...n,
+                    hidden: !(n.type === 'stepNode' && childIds.has(String(n.id))),
+                    selected: n.id === parentId
+                }))
+                finalEdges = laidEdges.map((e) => ({
+                    ...e,
+                    hidden: !(childIds.has(String(e.source)) && childIds.has(String(e.target)))
+                }))
+            } else {
+                // Filter to root nodes (null parent_step_id) by default
+                const rootIds = new Set<string>((steps || [])
+                    .filter((s) => !s.parent_step_id)
+                    .map((s) => String(s.id))
+                )
+                finalNodes = laidNodes.map((n) => ({
+                    ...n,
+                    hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
+                }))
+                finalEdges = laidEdges.map((e) => ({
+                    ...e,
+                    hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
+                }))
+            }
+            
+            setNodes(finalNodes)
+            setEdges(finalEdges)
+            layoutSigRef.current = computeTopologySignature(finalNodes, finalEdges)
 
             // Sidebar index: only include nodes that are parents (appear in someone else's parent_step_id)
             const parentIds = new Set<string>((steps || [])
@@ -710,6 +748,9 @@ export default function WorkflowPage() {
                 if (Object.keys(prev).length) return prev
                 const next: Record<string, boolean> = {}
                 for (const r of roots) next[r.id] = true
+                // If we have a parent from URL, also expand it
+                const parentFromUrl = searchParams?.get('parent')
+                if (parentFromUrl) next[parentFromUrl] = true
                 return next
             })
         } catch (err: any) {
@@ -745,29 +786,35 @@ export default function WorkflowPage() {
     }, [fetchData])
 
     // Apply initial selection from URL after nodes/edges are loaded (run once per parent value)
+    // This is now mainly for subsequent URL changes since initial filtering happens in fetchData
     useEffect(() => {
         const parentId = searchParams?.get('parent')
-        if (!parentId) {
-            appliedParentRef.current = null
-            return
-        }
         if (!nodes.length) return
-        if (appliedParentRef.current === parentId) return
-        // Mark selected only if needed
-        setNodes((ns) => {
-            let changed = false
-            for (const n of ns) {
-                const desired = n.id === parentId
-                if ((!!n.selected) !== desired) { changed = true; break }
-            }
-            if (!changed) return ns
-            return ns.map((n) => ({ ...n, selected: n.id === parentId }))
-        })
-        showChildrenOf(parentId)
-        // Ensure expanded state includes this parent
-        setExpanded((prev) => ({ ...prev, [parentId]: true }))
-        appliedParentRef.current = parentId
-    }, [searchParams, nodes, showChildrenOf, setNodes])
+        
+        if (parentId) {
+            // If parent param exists, filter to children of that parent
+            if (appliedParentRef.current === parentId) return
+            // Mark selected only if needed
+            setNodes((ns) => {
+                let changed = false
+                for (const n of ns) {
+                    const desired = n.id === parentId
+                    if ((!!n.selected) !== desired) { changed = true; break }
+                }
+                if (!changed) return ns
+                return ns.map((n) => ({ ...n, selected: n.id === parentId }))
+            })
+            showChildrenOf(parentId)
+            // Ensure expanded state includes this parent
+            setExpanded((prev) => ({ ...prev, [parentId]: true }))
+            appliedParentRef.current = parentId
+        } else {
+            // If no parent param, show only root nodes (empty parent_step_id)
+            if (appliedParentRef.current === null) return
+            showRootNodesOnly()
+            appliedParentRef.current = null
+        }
+    }, [searchParams, nodes, showChildrenOf, setNodes, showRootNodesOnly])
 
     // Add a new process_step as a node for the selected organization
     const handleAddStep = useCallback(async () => {
