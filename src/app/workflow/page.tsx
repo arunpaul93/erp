@@ -702,6 +702,19 @@ export default function WorkflowPage() {
                     .in('id', edgeDeletes as any)
                 if (delEdgesErr) throw delEdgesErr
             }
+            // Ensure no edges remain that reference nodes being deleted
+            if (nodeDeletes.length > 0) {
+                const { error: delEdgesFromNodesErr } = await supabase
+                    .from('process_flow_edge')
+                    .delete()
+                    .in('from_step_id', nodeDeletes as any)
+                if (delEdgesFromNodesErr) throw delEdgesFromNodesErr
+                const { error: delEdgesToNodesErr } = await supabase
+                    .from('process_flow_edge')
+                    .delete()
+                    .in('to_step_id', nodeDeletes as any)
+                if (delEdgesToNodesErr) throw delEdgesToNodesErr
+            }
             if (nodeDeletes.length > 0) {
                 const { error: delNodesErr } = await supabase
                     .from('process_step')
