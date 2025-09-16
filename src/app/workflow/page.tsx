@@ -1773,8 +1773,12 @@ function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect, sel
                     type="button"
                     onClick={(e) => {
                         e.stopPropagation()
-                        if (hasChildren) onToggle(item.id)
-                        else onSelect(item.id)
+                        if (hasChildren) {
+                            onToggle(item.id)
+                            onSelect(item.id)
+                        } else {
+                            onSelect(item.id)
+                        }
                     }}
                     onDoubleClick={(e) => { e.stopPropagation(); onSelect(item.id) }}
                     className={`truncate text-left text-xs hover:text-yellow-300 ${isSelected ? 'text-yellow-300 font-semibold' : 'text-gray-200'}`}
