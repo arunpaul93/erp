@@ -26,10 +26,17 @@ import ELK from 'elkjs/lib/elk.bundled.js'
 import ElectronEdge from './ElectronEdge'
 
 // Custom editable node for process steps
-type StepNodeData = { label: string; description?: string; editing?: boolean; onChange?: (name: string, desc: string) => void }
+type StepNodeData = {
+    label: string
+    description?: string
+    editing?: boolean
+    hasChildren?: boolean
+    onChange?: (name: string, desc: string) => void
+    onOpenChildren?: (id: string) => void
+}
 function StepNode(props: any) {
     const data = (props?.data || {}) as StepNodeData
-    const { label, description, editing, onChange } = data
+    const { label, description, editing, onChange, hasChildren, onOpenChildren } = data
     // Auto-expand description textarea when edit mode starts
     const descRef = React.useRef<HTMLTextAreaElement | null>(null)
     // View-mode autosize for label to keep wrapping nice while using native control rendering
@@ -142,6 +149,21 @@ function StepNode(props: any) {
             >
                 <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
                 <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
+                {/* Subprocess chevron for parent nodes */}
+                {!!hasChildren && !editing && (
+                    <button
+                        type="button"
+                        title="View subprocesses"
+                        className="absolute top-1 right-1 h-5 w-5 rounded bg-gray-800/80 text-yellow-300 hover:bg-gray-700 flex items-center justify-center border border-gray-700"
+                        onMouseDown={(e) => { e.stopPropagation() }}
+                        onClick={(e) => { e.stopPropagation(); onOpenChildren && onOpenChildren(String(props?.id)) }}
+                        aria-label="View subprocesses"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+                            <path fillRule="evenodd" d="M7.22 4.22a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L10.44 10 7.22 6.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" />
+                        </svg>
+                    </button>
+                )}
                 <textarea
                     ref={viewLabelRef}
                     readOnly
@@ -699,10 +721,22 @@ export default function WorkflowPage() {
 
             if (flowsErr) throw flowsErr
 
-            // Step nodes (include parentId for tree building)
+            // Build parent set for subprocess indicator
+            const parentIdSet = new Set<string>((steps || [])
+                .map((s) => s.parent_step_id)
+                .filter((v): v is string => !!v)
+                .map(String)
+            )
+
+            // Step nodes (include parentId for tree building + hasChildren prefab)
             const stepNodes: Node[] = (steps || []).map((s) => ({
                 id: s.id,
-                data: { label: s.name || 'Step', description: s.description || '', parentId: s.parent_step_id },
+                data: {
+                    label: s.name || 'Step',
+                    description: s.description || '',
+                    parentId: s.parent_step_id,
+                    hasChildren: parentIdSet.has(String(s.id)),
+                },
                 position: { x: 0, y: 0 },
                 type: 'stepNode',
                 style: {
@@ -950,11 +984,38 @@ export default function WorkflowPage() {
                 data: {
                     ...(n.data as any),
                     editing: isEditing,
-                    onChange: (name: string, desc: string) => applyDraftToNode(n.id, name, desc)
+                    onChange: (name: string, desc: string) => applyDraftToNode(n.id, name, desc),
+                    onOpenChildren: (id: string) => {
+                        setParentQuery(id)
+                        showChildrenOf(id)
+                    }
                 }
             }
         }))
-    }, [editingNodeId, applyDraftToNode, setNodes])
+    }, [editingNodeId, applyDraftToNode, setNodes, setParentQuery, showChildrenOf])
+
+    // Keep hasChildren in sync when nodes change (based on parentId relationships)
+    useEffect(() => {
+        setNodes(prev => {
+            const parentSet = new Set<string>(
+                prev
+                    .filter(n => n.type === 'stepNode' && !!((n.data as any)?.parentId))
+                    .map(n => String((n.data as any)?.parentId))
+            )
+            let changed = false
+            const next = prev.map(n => {
+                if (n.type !== 'stepNode') return n
+                const prevFlag = !!((n.data as any)?.hasChildren)
+                const nextFlag = parentSet.has(String(n.id))
+                if (prevFlag !== nextFlag) {
+                    changed = true
+                    return { ...n, data: { ...(n.data as any), hasChildren: nextFlag } }
+                }
+                return n
+            })
+            return changed ? next : prev
+        })
+    }, [nodes])
 
     const handleSave = useCallback(async () => {
         if (!selectedOrgId) return
