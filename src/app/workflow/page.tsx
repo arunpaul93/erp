@@ -763,7 +763,7 @@ export default function WorkflowPage() {
             return
         }
         try {
-        const parentFromUrl = searchParams?.get('parent') || null
+            const parentFromUrl = searchParams?.get('parent') || null
             const { data: newRows, error: insertErr } = await supabase
                 .from('process_step')
                 .insert({
@@ -771,7 +771,7 @@ export default function WorkflowPage() {
                     name: 'New Node',
                     description: null,
                     metadata: {},
-            parent_step_id: parentFromUrl,
+                    parent_step_id: parentFromUrl,
                 })
                 .select('id')
                 .limit(1)
