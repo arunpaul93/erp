@@ -220,6 +220,7 @@ export default function WorkflowPage() {
     const [contextMenu, setContextMenu] = useState<
         | { visible: false }
         | { visible: true; x: number; y: number; kind: 'node' | 'edge'; targetId: string }
+        | { visible: true; x: number; y: number; kind: 'multi'; selectedIds: string[] }
     >({ visible: false })
     const [labelEditor, setLabelEditor] = useState<
         | null
@@ -253,11 +254,7 @@ export default function WorkflowPage() {
     const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
     const [tree, setTree] = useState<TreeItem[]>([])
     const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-    // Marquee selection state
-    const [isMarqueeMode, setIsMarqueeMode] = useState<boolean>(false)
-    const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null)
-    const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null)
-    const [isDraggingMarquee, setIsDraggingMarquee] = useState<boolean>(false)
+    // (marquee selection uses React Flow built-in selectionOnDrag)
 
     useEffect(() => {
         try {
@@ -276,6 +273,7 @@ export default function WorkflowPage() {
     }, [showConfig, colGap, rowGap])
     const configRef = React.useRef<HTMLDivElement | null>(null)
     const configBtnRef = React.useRef<HTMLButtonElement | null>(null)
+    const canvasRef = React.useRef<HTMLDivElement | null>(null)
     useEffect(() => {
         if (!showConfig) return
         const onDocMouseDown = (e: MouseEvent) => {
@@ -294,6 +292,25 @@ export default function WorkflowPage() {
             localStorage.setItem('workflow_row_gap', String(y))
         } catch { }
     }, [])
+
+    // Ensure multi-select right-click always shows our menu (prevents browser menu)
+    useEffect(() => {
+        const handler = (e: MouseEvent) => {
+            const target = e.target as HTMLElement | null
+            if (!target) return
+            // ignore events originating from our custom menu
+            if (target.closest('.workflow-menu')) return
+            const root = canvasRef.current
+            if (!root || !root.contains(target)) return
+            const selectedIds = nodes.filter(n => !!n.selected).map(n => String(n.id))
+            if (selectedIds.length > 1) {
+                e.preventDefault()
+                setContextMenu({ visible: true, x: e.clientX, y: e.clientY, kind: 'multi', selectedIds })
+            }
+        }
+        document.addEventListener('contextmenu', handler)
+        return () => document.removeEventListener('contextmenu', handler)
+    }, [nodes])
 
     // Sync selection filter with URL (?parent=ID)
     const setParentQuery = useCallback((id: string | null) => {
@@ -327,85 +344,7 @@ export default function WorkflowPage() {
         })
     }, [])
 
-    // Marquee selection functions
-    const getNodesInMarquee = useCallback((start: { x: number; y: number }, end: { x: number; y: number }) => {
-        const instance = flowRef.current
-        if (!instance) return []
-
-        const minX = Math.min(start.x, end.x)
-        const maxX = Math.max(start.x, end.x)
-        const minY = Math.min(start.y, end.y)
-        const maxY = Math.max(start.y, end.y)
-
-        return nodes.filter(node => {
-            if (node.type !== 'stepNode' || (node as any).hidden) return false
-
-            // Convert screen coordinates to flow coordinates
-            const transform = instance.getViewport()
-            const flowStartX = (minX - transform.x) / transform.zoom
-            const flowEndX = (maxX - transform.x) / transform.zoom
-            const flowStartY = (minY - transform.y) / transform.zoom
-            const flowEndY = (maxY - transform.y) / transform.zoom
-
-            const nodeWidth = ((node.style as any)?.width ?? 220)
-            const nodeHeight = 80
-
-            // Check if node overlaps with marquee rectangle in flow coordinates
-            return (
-                node.position.x < flowEndX &&
-                node.position.x + nodeWidth > flowStartX &&
-                node.position.y < flowEndY &&
-                node.position.y + nodeHeight > flowStartY
-            )
-        })
-    }, [nodes])
-
-    const handleMarqueeMouseDown = useCallback((event: React.MouseEvent) => {
-        if (!isMarqueeMode) return
-
-        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-        const startPos = {
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top
-        }
-
-        setMarqueeStart(startPos)
-        setMarqueeEnd(startPos)
-        setIsDraggingMarquee(true)
-
-        // Clear existing selections
-        setNodes(ns => ns.map(n => ({ ...n, selected: false })))
-
-        event.preventDefault()
-        event.stopPropagation()
-    }, [isMarqueeMode, setNodes])
-
-    const handleMarqueeMouseMove = useCallback((event: React.MouseEvent) => {
-        if (!isDraggingMarquee || !marqueeStart) return
-
-        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-        const currentPos = {
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top
-        }
-
-        setMarqueeEnd(currentPos)
-
-        // Update node selections based on current marquee
-        const nodesInMarquee = getNodesInMarquee(marqueeStart, currentPos)
-        const selectedIds = new Set(nodesInMarquee.map(n => n.id))
-
-        setNodes(ns => ns.map(n => ({
-            ...n,
-            selected: selectedIds.has(n.id)
-        })))
-    }, [isDraggingMarquee, marqueeStart, getNodesInMarquee, setNodes])
-
-    const handleMarqueeMouseUp = useCallback(() => {
-        setIsDraggingMarquee(false)
-        setMarqueeStart(null)
-        setMarqueeEnd(null)
-    }, [])
+    // (removed custom marquee handlers; using selectionOnDrag on ReactFlow)
 
     // Show only direct children (nodes whose parent_step_id matches given id)
     const showChildrenOf = useCallback((parentId: string) => {
@@ -464,10 +403,10 @@ export default function WorkflowPage() {
                 .is('parent_step_id', null)
             if (rootsErr) throw rootsErr
             const rootIds = new Set<string>((roots || []).map((r: any) => String(r.id)))
-            let updatedNodes = nodes.map((n) => ({
+            let updatedNodes: Node[] = (nodes.map((n) => ({
                 ...n,
                 hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
-            }))
+            })) as unknown) as Node[]
             // Apply grid layout to visible root nodes
             updatedNodes = arrangeInGrid(updatedNodes, Math.max(colGap, 300))
             setNodes(updatedNodes)
@@ -1241,6 +1180,7 @@ export default function WorkflowPage() {
     // Context menu handlers
     const openNodeMenu = useCallback((event: React.MouseEvent, nodeId: string) => {
         event.preventDefault()
+        // Always show node menu on node right-click so actions like Subprocesses are available
         setContextMenu({ visible: true, x: event.clientX, y: event.clientY, kind: 'node', targetId: nodeId })
     }, [])
     const openEdgeMenu = useCallback((event: React.MouseEvent, edgeId: string) => {
@@ -1292,6 +1232,40 @@ export default function WorkflowPage() {
                 setEdges((eds) => eds.filter((e) => String(e.id) !== String(flowId)))
                 setPendingEdgeDeletes((prev) => ({ ...prev, [flowId]: true }))
                 setEdgeDirtyEdits((prev) => { const next = { ...prev }; delete (next as any)[flowId]; return next })
+            } else if (contextMenu.kind === 'multi') {
+                const toDelete = new Set(contextMenu.selectedIds.map(String))
+                // Remove nodes
+                setNodes((ns) => {
+                    const filtered = ns.filter((n) => !toDelete.has(String(n.id)))
+                    queueMicrotask(() => rebuildTreeFromNodes(filtered))
+                    return filtered
+                })
+                // Collect and remove connected edges
+                const connected = edges
+                    .filter((e) => toDelete.has(String(e.source)) || toDelete.has(String(e.target)))
+                    .map((e) => String(e.id))
+                if (connected.length) {
+                    const connectedSet = new Set(connected)
+                    setEdges((eds) => eds.filter((e) => !connectedSet.has(String(e.id))))
+                    setPendingEdgeDeletes((prev) => connected.reduce((acc, id) => ({ ...acc, [id]: true }), { ...prev }))
+                    setEdgeDirtyEdits((prev) => {
+                        const next = { ...prev } as Record<string, string>
+                        connected.forEach((id) => { delete next[id] })
+                        return next
+                    })
+                }
+                // Mark nodes for deletion and clear any dirty edits for them
+                setPendingNodeDeletes((prev) => {
+                    const next = { ...prev }
+                    contextMenu.selectedIds.forEach((id) => { (next as any)[id] = true })
+                    return next
+                })
+                setDirtyEdits((prev) => {
+                    const next = { ...prev }
+                    contextMenu.selectedIds.forEach((id) => { delete (next as any)[id] })
+                    return next
+                })
+                if (editingNodeId && toDelete.has(editingNodeId)) setEditingNodeId(null)
             }
         } catch (e: any) {
             setError(e.message || 'Failed to delete')
@@ -1370,20 +1344,6 @@ export default function WorkflowPage() {
                             <path d="M5 12l5 5L20 7" />
                         </svg>
                         {animateEdges ? 'Animate: On' : 'Animate: Off'}
-                    </button>
-                    <button
-                        onClick={() => setIsMarqueeMode((v) => !v)}
-                        className={`inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium border border-gray-700 ${isMarqueeMode
-                                ? 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
-                                : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
-                            }`}
-                        aria-label="Toggle marquee selection"
-                        title="Toggle marquee selection"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" strokeDasharray="5,5" />
-                        </svg>
-                        {isMarqueeMode ? 'Marquee: On' : 'Marquee: Off'}
                     </button>
                     <button
                         onClick={() => setShowConfig(v => !v)}
@@ -1524,10 +1484,24 @@ export default function WorkflowPage() {
                             </div>
                         )}
                         <div
+                            ref={canvasRef}
                             className="relative w-full h-full"
-                            onMouseDown={handleMarqueeMouseDown}
-                            onMouseMove={handleMarqueeMouseMove}
-                            onMouseUp={handleMarqueeMouseUp}
+                            onContextMenu={(e) => {
+                                const selectedIds = nodes.filter(n => !!n.selected).map(n => String(n.id))
+                                if (selectedIds.length > 1) {
+                                    const target = e.target as HTMLElement
+                                    // Ignore context menu events coming from our own menu
+                                    if (target.closest('.workflow-menu')) return
+                                    // Only hijack if right-clicked over the flow pane or a node (not edges)
+                                    const overNode = !!target.closest('.react-flow__node, .xyflow__node')
+                                    const overPane = !!target.closest('.react-flow__pane, .xyflow__pane')
+                                    const overEdge = !!target.closest('.react-flow__edge, .xyflow__edge')
+                                    if ((overNode || overPane) && !overEdge) {
+                                        e.preventDefault()
+                                        setContextMenu({ visible: true, x: e.clientX, y: e.clientY, kind: 'multi', selectedIds })
+                                    }
+                                }
+                            }}
                         >
                             <ReactFlow
                                 nodes={nodes}
@@ -1545,34 +1519,37 @@ export default function WorkflowPage() {
                                     e.preventDefault();
                                     openEdgeLabelEditor(e.clientX, e.clientY, String(ed.id))
                                 }}
+                                selectionOnDrag
+                                panOnDrag={[1, 2]}
                                 onPaneClick={() => {
                                     setEditingNodeId(null);
                                     closeMenu();
                                     closeLabelEditor();
                                     setShowConfig(false);
-                                    if (isMarqueeMode) {
-                                        setNodes(ns => ns.map(n => ({ ...n, selected: false })));
-                                    }
                                 }}
                                 onNodeClick={(_, n) => {
-                                    if (!isMarqueeMode) {
-                                        if (editingNodeId && String(n.id) !== editingNodeId) setEditingNodeId(null)
-                                        closeMenu();
-                                        closeLabelEditor();
-                                        setShowConfig(false)
-                                    }
+                                    if (editingNodeId && String(n.id) !== editingNodeId) setEditingNodeId(null)
+                                    closeMenu();
+                                    closeLabelEditor();
+                                    setShowConfig(false)
                                 }}
                                 onEdgeClick={() => {
-                                    if (!isMarqueeMode) {
-                                        setEditingNodeId(null);
-                                        closeMenu();
-                                        closeLabelEditor();
-                                        setShowConfig(false)
+                                    setEditingNodeId(null);
+                                    closeMenu();
+                                    closeLabelEditor();
+                                    setShowConfig(false)
+                                }}
+                                onNodeContextMenu={(e, n) => openNodeMenu(e, String(n.id))}
+                                onEdgeContextMenu={(e, ed) => openEdgeMenu(e, String(ed.id))}
+                                onPaneContextMenu={(e) => {
+                                    e.preventDefault()
+                                    const selectedIds = nodes.filter(n => !!n.selected).map(n => String(n.id))
+                                    if (selectedIds.length > 1) {
+                                        setContextMenu({ visible: true, x: e.clientX, y: e.clientY, kind: 'multi', selectedIds })
+                                    } else {
+                                        closeMenu()
                                     }
                                 }}
-                                onNodeContextMenu={(e, n) => !isMarqueeMode && openNodeMenu(e, String(n.id))}
-                                onEdgeContextMenu={(e, ed) => !isMarqueeMode && openEdgeMenu(e, String(ed.id))}
-                                onPaneContextMenu={(e) => { e.preventDefault(); closeMenu() }}
                                 nodeTypes={{ stepNode: StepNode }}
                                 edgeTypes={{ electron: ElectronEdge }}
                                 onInit={(instance) => { flowRef.current = instance }}
@@ -1588,23 +1565,10 @@ export default function WorkflowPage() {
                                     fitViewOptions={{ padding: 0.15 }}
                                 />
                             </ReactFlow>
-
-                            {/* Marquee selection overlay */}
-                            {isDraggingMarquee && marqueeStart && marqueeEnd && (
-                                <div
-                                    className="absolute border-2 border-yellow-400 bg-yellow-400/10 pointer-events-none z-50"
-                                    style={{
-                                        left: Math.min(marqueeStart.x, marqueeEnd.x),
-                                        top: Math.min(marqueeStart.y, marqueeEnd.y),
-                                        width: Math.abs(marqueeEnd.x - marqueeStart.x),
-                                        height: Math.abs(marqueeEnd.y - marqueeStart.y),
-                                    }}
-                                />
-                            )}
                         </div>
                         {contextMenu.visible && (
                             <div
-                                className="z-50"
+                                className="z-50 workflow-menu"
                                 style={{ position: 'fixed', top: contextMenu.y, left: contextMenu.x }}
                                 onClick={(e) => e.stopPropagation()}
                             >
@@ -1617,12 +1581,40 @@ export default function WorkflowPage() {
                                             Edit label
                                         </button>
                                     )}
-                                    <button
-                                        className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-800"
-                                        onClick={handleDelete}
-                                    >
-                                        Delete
-                                    </button>
+                                    {contextMenu.kind === 'node' && (
+                                        <button
+                                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-800"
+                                            onClick={() => { setParentQuery(contextMenu.targetId); showChildrenOf(contextMenu.targetId); closeMenu() }}
+                                        >
+                                            Subprocesses
+                                        </button>
+                                    )}
+                                    {contextMenu.kind === 'multi' ? (
+                                        <button
+                                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-800 text-red-300"
+                                            onClick={handleDelete}
+                                        >
+                                            Delete selected ({(contextMenu as any).selectedIds.length})
+                                        </button>
+                                    ) : contextMenu.kind === 'node' && nodes.some(n => n.selected) && nodes.filter(n => n.selected).length > 1 ? (
+                                        <button
+                                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-800 text-red-300"
+                                            onClick={() => {
+                                                const selectedIds = nodes.filter(n => !!n.selected).map(n => String(n.id))
+                                                setContextMenu({ visible: true, x: contextMenu.x, y: contextMenu.y, kind: 'multi', selectedIds })
+                                                handleDelete()
+                                            }}
+                                        >
+                                            Delete selected ({nodes.filter(n => n.selected).length})
+                                        </button>
+                                    ) : (
+                                        <button
+                                            className="w-full text-left px-3 py-1.5 text-sm hover:bg-gray-800"
+                                            onClick={handleDelete}
+                                        >
+                                            Delete
+                                        </button>
+                                    )}
                                 </div>
                             </div>
                         )}
