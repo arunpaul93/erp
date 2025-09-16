@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useMemo, useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams, usePathname } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
 import { supabase } from '@/lib/supabase'
@@ -201,6 +201,8 @@ export default function WorkflowPage() {
     const { user, loading } = useAuth()
     const { selectedOrgId, orgs } = useOrg()
     const router = useRouter()
+    const searchParams = useSearchParams()
+    const pathname = usePathname()
 
     const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[])
     const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[])
@@ -227,6 +229,8 @@ export default function WorkflowPage() {
     // Track whether a successful connect happened to avoid creating a new node on end
     const didConnectRef = React.useRef<boolean>(false)
     const flowRef = React.useRef<ReactFlowInstance | null>(null)
+    // Track which parent filter from URL has been applied to avoid loops
+    const appliedParentRef = React.useRef<string | null>(null)
     // Keep last computed layout positions (from ELK) so we can snap nodes back after drag
     const layoutPosRef = React.useRef<Map<string, { x: number; y: number }>>(new Map())
     // Track topology signature to trigger auto layout when structure changes
@@ -284,6 +288,62 @@ export default function WorkflowPage() {
             localStorage.setItem('workflow_row_gap', String(y))
         } catch { }
     }, [])
+
+    // Sync selection filter with URL (?parent=ID)
+    const setParentQuery = useCallback((id: string | null) => {
+        try {
+            const params = new URLSearchParams(searchParams?.toString())
+            if (id) params.set('parent', String(id))
+            else params.delete('parent')
+            router.replace(`${pathname}?${params.toString()}`)
+        } catch { /* no-op */ }
+    }, [router, pathname, searchParams])
+
+    // Show only direct children (nodes whose parent_step_id matches given id)
+    const showChildrenOf = useCallback((parentId: string) => {
+        setNodes((ns) => {
+            const childIds = new Set<string>(
+                ns
+                    .filter((n) => n.type === 'stepNode' && String((n.data as any)?.parentId || '') === String(parentId))
+                    .map((n) => String(n.id))
+            )
+            // Determine if a change is needed
+            let changed = false
+            for (const n of ns) {
+                const shouldBeVisible = n.type === 'stepNode' && childIds.has(String(n.id))
+                const shouldBeHidden = !shouldBeVisible
+                const currentlyHidden = !!(n as any).hidden
+                if (currentlyHidden !== shouldBeHidden) { changed = true; break }
+            }
+            if (!changed) return ns
+
+            // Hide non-children nodes
+            const nextNodes = ns.map((n) => ({
+                ...n,
+                hidden: !(n.type === 'stepNode' && childIds.has(String(n.id)))
+            }))
+            // Hide edges not fully within the visible subset
+            setEdges((es) => {
+                let edgeChanged = false
+                const nextEdges = es.map((e) => {
+                    const shouldHide = !(childIds.has(String(e.source)) && childIds.has(String(e.target)))
+                    const currentlyHidden = !!(e as any).hidden
+                    if (currentlyHidden !== shouldHide) edgeChanged = true
+                    return { ...e, hidden: shouldHide }
+                })
+                return edgeChanged ? nextEdges : es
+            })
+            // Fit view to visible nodes
+            queueMicrotask(() => {
+                const instance = flowRef.current
+                if (instance) {
+                    const visible = (instance as any).getNodes ? (instance as any).getNodes().filter((n: any) => !n.hidden) : nextNodes.filter((n) => !(n as any).hidden)
+                    if (visible.length) instance.fitView({ nodes: visible as any, padding: 0.2, duration: 0 })
+                }
+            })
+            return nextNodes
+        })
+    }, [setNodes, setEdges])
 
     // Show only root nodes (parent_step_id is null) by querying backend, hide others, and fit view
     const showRootNodesOnly = useCallback(async () => {
@@ -608,17 +668,26 @@ export default function WorkflowPage() {
             setEdges(laidEdges)
             layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
 
-            // Sidebar index: show nodes where parent_step_id is null as top-level, and include their hierarchy
+            // Sidebar index: only include nodes that are parents (appear in someone else's parent_step_id)
+            const parentIds = new Set<string>((steps || [])
+                .map((s) => s.parent_step_id)
+                .filter((v): v is string => !!v)
+                .map(String))
             const byId: Record<string, TreeItem> = {}
             for (const s of (steps || [])) {
-                byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
+                if (parentIds.has(String(s.id))) {
+                    byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
+                }
             }
             for (const s of (steps || [])) {
                 const pid = s.parent_step_id
-                if (pid && byId[pid]) byId[pid].children.push(byId[s.id])
+                if (pid && byId[pid] && byId[s.id]) {
+                    byId[pid].children.push(byId[s.id])
+                }
             }
+            // Roots are parent nodes with no parent_step_id
             const roots: TreeItem[] = (steps || [])
-                .filter((s) => !s.parent_step_id)
+                .filter((s) => !s.parent_step_id && byId[s.id])
                 .map((s) => byId[s.id])
             const sortTree = (items: TreeItem[]) => { items.sort((a, b) => a.name.localeCompare(b.name)); items.forEach((it) => sortTree(it.children)) }
             sortTree(roots)
@@ -642,12 +711,13 @@ export default function WorkflowPage() {
         const items: { id: string; name: string; parentId?: string | null }[] = ns
             .filter((n) => n.type === 'stepNode')
             .map((n) => ({ id: n.id, name: (n.data as any)?.label || 'Step', parentId: (n.data as any)?.parentId ?? null }))
-        const allowed = new Set<string>(items.map((i) => i.parentId).filter((v): v is string => !!v))
+        // Only include nodes that are parents of someone
+        const parentIds = new Set<string>(items.map((i) => i.parentId).filter((v): v is string => !!v))
         const byId: Record<string, TreeItem> = {}
-        for (const it of items) if (allowed.has(it.id)) byId[it.id] = { id: it.id, name: it.name, children: [] }
+        for (const it of items) if (parentIds.has(it.id)) byId[it.id] = { id: it.id, name: it.name, children: [] }
         const roots: TreeItem[] = []
         for (const it of items) {
-            if (!allowed.has(it.id)) continue
+            if (!parentIds.has(it.id)) continue
             const pid = it.parentId
             if (pid && byId[pid]) byId[pid].children.push(byId[it.id])
             else roots.push(byId[it.id])
@@ -661,6 +731,31 @@ export default function WorkflowPage() {
         fetchData()
     }, [fetchData])
 
+    // Apply initial selection from URL after nodes/edges are loaded (run once per parent value)
+    useEffect(() => {
+        const parentId = searchParams?.get('parent')
+        if (!parentId) {
+            appliedParentRef.current = null
+            return
+        }
+        if (!nodes.length) return
+        if (appliedParentRef.current === parentId) return
+        // Mark selected only if needed
+        setNodes((ns) => {
+            let changed = false
+            for (const n of ns) {
+                const desired = n.id === parentId
+                if ((!!n.selected) !== desired) { changed = true; break }
+            }
+            if (!changed) return ns
+            return ns.map((n) => ({ ...n, selected: n.id === parentId }))
+        })
+        showChildrenOf(parentId)
+        // Ensure expanded state includes this parent
+        setExpanded((prev) => ({ ...prev, [parentId]: true }))
+        appliedParentRef.current = parentId
+    }, [searchParams, nodes, showChildrenOf, setNodes])
+
     // Add a new process_step as a node for the selected organization
     const handleAddStep = useCallback(async () => {
         if (!selectedOrgId) {
@@ -668,6 +763,7 @@ export default function WorkflowPage() {
             return
         }
         try {
+        const parentFromUrl = searchParams?.get('parent') || null
             const { data: newRows, error: insertErr } = await supabase
                 .from('process_step')
                 .insert({
@@ -675,7 +771,7 @@ export default function WorkflowPage() {
                     name: 'New Node',
                     description: null,
                     metadata: {},
-                    parent_step_id: null,
+            parent_step_id: parentFromUrl,
                 })
                 .select('id')
                 .limit(1)
@@ -687,7 +783,7 @@ export default function WorkflowPage() {
             const newNode: Node = {
                 id: newId,
                 type: 'stepNode',
-                data: { label: 'New Node', description: '', parentId: null },
+                data: { label: 'New Node', description: '', parentId: parentFromUrl },
                 position: { x: 0, y: 0 },
                 style: {
                     border: '1px solid #1f2937',
@@ -700,10 +796,13 @@ export default function WorkflowPage() {
             setNodes(laidNodes)
             setEdges(laidEdges)
             layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
+            if (parentFromUrl) {
+                queueMicrotask(() => showChildrenOf(parentFromUrl))
+            }
         } catch (e: any) {
             setError(e.message || 'Failed to add node')
         }
-    }, [selectedOrgId, nodes, edges, applyElkLayout])
+    }, [selectedOrgId, nodes, edges, applyElkLayout, searchParams, showChildrenOf])
 
     // Track edits in local state and update rendered node label live
     const startEditingNode = useCallback((nodeId: string) => {
@@ -885,10 +984,11 @@ export default function WorkflowPage() {
         if (!isPane) return
 
         try {
+            const parentFromUrl = searchParams?.get('parent') || null
             // 1) Create the new step
             const { data: stepRows, error: stepErr } = await supabase
                 .from('process_step')
-                .insert({ organisation_id: selectedOrgId, name: 'New Node', description: null, metadata: {}, parent_step_id: null })
+                .insert({ organisation_id: selectedOrgId, name: 'New Node', description: null, metadata: {}, parent_step_id: parentFromUrl })
                 .select('id')
                 .limit(1)
             if (stepErr) throw stepErr
@@ -907,7 +1007,7 @@ export default function WorkflowPage() {
             const newNode: Node = {
                 id: newStepId,
                 type: 'stepNode',
-                data: { label: 'New Node', description: '', parentId: null },
+                data: { label: 'New Node', description: '', parentId: parentFromUrl },
                 position: { x: 0, y: 0 },
                 style: { border: '1px solid #1f2937', background: 'rgba(17,24,39,0.9)', color: '#e5e7eb' }
             }
@@ -926,10 +1026,14 @@ export default function WorkflowPage() {
             setEdges(laidEdges)
             layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
             setEditingNodeId(newStepId)
+            // Maintain filtered view if a parent is selected in URL
+            if (parentFromUrl) {
+                queueMicrotask(() => showChildrenOf(parentFromUrl))
+            }
         } catch (e: any) {
             setError(e.message || 'Failed to create connected node')
         }
-    }, [selectedOrgId, nodes, edges, applyElkLayout, styleEdges, animateEdges])
+    }, [selectedOrgId, nodes, edges, applyElkLayout, styleEdges, animateEdges, searchParams, showChildrenOf])
 
     // When a node drag ends, snap it back to the last ELK layout position (with CSS transition)
     const onNodeDragStop = useCallback((_: any, node: Node) => {
@@ -1158,7 +1262,7 @@ export default function WorkflowPage() {
                                 <div className="px-2 mb-1">
                                     <button
                                         type="button"
-                                        onClick={showRootNodesOnly}
+                                        onClick={() => { showRootNodesOnly(); setParentQuery(null) }}
                                         className="w-full text-left truncate text-xs text-yellow-300 font-semibold hover:text-yellow-200"
                                         title={(orgs.find(o => o.id === selectedOrgId)?.name || 'Organisation') + ' — show top-level nodes'}
                                     >
@@ -1169,16 +1273,12 @@ export default function WorkflowPage() {
                                     roots={tree}
                                     expanded={expanded}
                                     onToggle={(id) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))}
+                                    selectedId={searchParams?.get('parent') || null}
                                     onSelect={async (id) => {
-                                        // Full refresh from backend
-                                        await fetchData()
-                                        // Select and focus node in canvas
+                                        // Keep current dataset; filter view to children of selected node
                                         setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })))
-                                        const instance = flowRef.current
-                                        if (instance) {
-                                            const nodeNow = (instance as any).getNodes ? (instance as any).getNodes().find((n: any) => n.id === id) : nodes.find((n) => n.id === id)
-                                            if (nodeNow) instance.fitView({ nodes: [nodeNow as any], padding: 0.2, duration: 0 })
-                                        }
+                                        setParentQuery(id)
+                                        showChildrenOf(id)
                                     }}
                                 />
                             </div>
@@ -1349,24 +1449,25 @@ export default function WorkflowPage() {
 }
 
 // Sidebar tree components
-function SidebarTree({ roots, expanded, onToggle, onSelect }: { roots: TreeItem[]; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void }) {
+function SidebarTree({ roots, expanded, onToggle, onSelect, selectedId }: { roots: TreeItem[]; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void; selectedId?: string | null }) {
     return (
         <div className="px-2">
             {roots.length === 0 ? (
                 <div className="text-xs text-gray-500 px-2 py-2">No steps</div>
             ) : (
                 roots.map((r, i) => (
-                    <TreeRow key={r.id} item={r} level={0} index={i + 1} prefix="" expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+                    <TreeRow key={r.id} item={r} level={0} index={i + 1} prefix="" expanded={expanded} onToggle={onToggle} onSelect={onSelect} selectedId={selectedId || undefined} />
                 ))
             )}
         </div>
     )
 }
 
-function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect }: { item: TreeItem; level: number; index: number; prefix: string; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void }) {
+function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect, selectedId }: { item: TreeItem; level: number; index: number; prefix: string; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void; selectedId?: string }) {
     const hasChildren = item.children.length > 0
     const isOpen = expanded[item.id]
     const numberLabel = prefix ? `${prefix}.${index}` : `${index}`
+    const isSelected = selectedId === item.id
     return (
         <div className="select-none">
             <div className="flex items-center gap-1 py-1"
@@ -1398,18 +1499,18 @@ function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect }: {
                         else onSelect(item.id)
                     }}
                     onDoubleClick={(e) => { e.stopPropagation(); onSelect(item.id) }}
-                    className="truncate text-left text-xs text-gray-200 hover:text-yellow-300"
+                    className={`truncate text-left text-xs hover:text-yellow-300 ${isSelected ? 'text-yellow-300 font-semibold' : 'text-gray-200'}`}
                     title={`${numberLabel} ${item.name}`}
                     role={hasChildren ? 'treeitem' : undefined}
                     aria-expanded={hasChildren ? isOpen : undefined}
                 >
-                    <span className="text-gray-400 mr-1">{numberLabel}.</span> {item.name}
+                    <span className={`mr-1 ${isSelected ? 'text-yellow-400' : 'text-gray-400'}`}>{numberLabel}.</span> {item.name}
                 </button>
             </div>
             {hasChildren && isOpen && (
                 <div>
                     {item.children.map((c, idx) => (
-                        <TreeRow key={c.id} item={c} level={level + 1} index={idx + 1} prefix={numberLabel} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+                        <TreeRow key={c.id} item={c} level={level + 1} index={idx + 1} prefix={numberLabel} expanded={expanded} onToggle={onToggle} onSelect={onSelect} selectedId={selectedId} />
                     ))}
                 </div>
             )}
