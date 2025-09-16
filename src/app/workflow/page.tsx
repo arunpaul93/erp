@@ -31,6 +31,7 @@ type StepNodeData = {
     description?: string
     editing?: boolean
     hasChildren?: boolean
+    parentId?: string | null
     onChange?: (name: string, desc: string) => void
     onOpenChildren?: (id: string) => void
 }
@@ -234,7 +235,7 @@ export default function WorkflowPage() {
     const [editingNodeId, setEditingNodeId] = useState<string | null>(null)
     const [draftName, setDraftName] = useState('')
     const [draftDesc, setDraftDesc] = useState('')
-    const [dirtyEdits, setDirtyEdits] = useState<Record<string, { name?: string; description?: string }>>({})
+    const [dirtyEdits, setDirtyEdits] = useState<Record<string, { name?: string; description?: string; parentId?: string | null }>>({})
     const [edgeDirtyEdits, setEdgeDirtyEdits] = useState<Record<string, string>>({})
     // Pending deletions (soft delete until Save)
     const [pendingNodeDeletes, setPendingNodeDeletes] = useState<Record<string, boolean>>({})
@@ -248,6 +249,11 @@ export default function WorkflowPage() {
         | null
         | { visible: true; x: number; y: number; edgeId: string; value: string }
     >(null)
+    const [reparentPicker, setReparentPicker] = useState<
+        | null
+        | { visible: true; x: number; y: number; nodeId: string; query: string }
+    >(null)
+    const reparentRef = React.useRef<HTMLDivElement | null>(null)
     const connectingFromRef = React.useRef<string | null>(null)
     // Track whether a successful connect happened to avoid creating a new node on end
     const didConnectRef = React.useRef<boolean>(false)
@@ -1034,6 +1040,8 @@ export default function WorkflowPage() {
                     id,
                     name: val.name ?? undefined,
                     description: val.description ?? undefined,
+                    // Include parent change if present (can be null)
+                    parent_step_id: (Object.prototype.hasOwnProperty.call(val, 'parentId') ? (val.parentId as any) : undefined),
                 }))
             if (payload.length > 0) {
                 const { error: upsertErr } = await supabase
@@ -1259,6 +1267,28 @@ export default function WorkflowPage() {
     }, [edges])
 
     const closeLabelEditor = useCallback(() => setLabelEditor(null), [])
+    const openReparentPicker = useCallback((x: number, y: number, nodeId: string) => {
+        setReparentPicker({ visible: true, x, y, nodeId, query: '' })
+    }, [])
+    const closeReparentPicker = useCallback(() => setReparentPicker(null), [])
+
+    // Close reparent picker on outside left-click
+    useEffect(() => {
+        if (!reparentPicker?.visible) return
+        const handler = (e: MouseEvent) => {
+            // Only close on left-click to avoid interfering with right-click open
+            if (e.button !== 0) return
+            const t = e.target as Node | null
+            const box = reparentRef.current
+            if (!box) return
+            const inside = (box as any).contains?.(t as any)
+            if (!inside) {
+                setReparentPicker(null)
+            }
+        }
+        document.addEventListener('mousedown', handler)
+        return () => document.removeEventListener('mousedown', handler)
+    }, [reparentPicker])
 
     const handleDelete = useCallback(async () => {
         if (!contextMenu.visible) return
@@ -1489,6 +1519,11 @@ export default function WorkflowPage() {
                                         setParentQuery(id)
                                         showChildrenOf(id)
                                     }}
+                                    onContextMenu={(e, id) => {
+                                        e.preventDefault();
+                                        // Open reparent picker from index only
+                                        openReparentPicker(e.clientX, e.clientY, id)
+                                    }}
                                 />
                             </div>
                         )}
@@ -1586,18 +1621,21 @@ export default function WorkflowPage() {
                                     setEditingNodeId(null);
                                     closeMenu();
                                     closeLabelEditor();
+                                    closeReparentPicker();
                                     setShowConfig(false);
                                 }}
                                 onNodeClick={(_, n) => {
                                     if (editingNodeId && String(n.id) !== editingNodeId) setEditingNodeId(null)
                                     closeMenu();
                                     closeLabelEditor();
+                                    closeReparentPicker();
                                     setShowConfig(false)
                                 }}
                                 onEdgeClick={() => {
                                     setEditingNodeId(null);
                                     closeMenu();
                                     closeLabelEditor();
+                                    closeReparentPicker();
                                     setShowConfig(false)
                                 }}
                                 onNodeContextMenu={(e, n) => openNodeMenu(e, String(n.id))}
@@ -1719,6 +1757,85 @@ export default function WorkflowPage() {
                                 />
                             </div>
                         )}
+                        {reparentPicker?.visible && (
+                            <div
+                                className="z-50"
+                                style={{ position: 'fixed', top: reparentPicker.y, left: reparentPicker.x }}
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div ref={reparentRef} className="min-w-56 p-2 rounded border border-gray-700 bg-gray-900 text-gray-100 shadow-lg">
+                                    <div className="text-xs mb-1 text-gray-300">Change parent</div>
+                                    <input
+                                        autoFocus
+                                        placeholder="Search parent by name…"
+                                        className="w-full px-2 py-1 mb-2 text-sm rounded border border-gray-700 bg-gray-900 text-gray-100"
+                                        value={reparentPicker.query}
+                                        onChange={(e) => setReparentPicker(prev => prev ? { ...prev, query: e.target.value } : prev)}
+                                        onKeyDown={(e) => { if (e.key === 'Escape') closeReparentPicker() }}
+                                    />
+                                    <div className="max-h-48 overflow-auto text-sm">
+                                        <button
+                                            className="w-full text-left px-2 py-1 hover:bg-gray-800 text-gray-200"
+                                            onClick={() => {
+                                                // Set to root (no parent)
+                                                let nextNodes: Node[] = []
+                                                setNodes(ns => {
+                                                    nextNodes = ns.map(n => n.id === reparentPicker.nodeId ? { ...n, data: { ...(n.data as any), parentId: null } } : n)
+                                                    return nextNodes
+                                                })
+                                                queueMicrotask(() => rebuildTreeFromNodes(nextNodes))
+                                                setDirtyEdits(prev => ({ ...prev, [reparentPicker.nodeId]: { ...(prev[reparentPicker.nodeId] || {}), parentId: null } }))
+                                                setParentQuery(null)
+                                                showRootNodesOnly()
+                                                closeReparentPicker()
+                                            }}
+                                        >
+                                            No parent (top level)
+                                        </button>
+                                        {(() => {
+                                            // Exclude self and descendants to prevent cycles
+                                            const targetId = reparentPicker.nodeId
+                                            const parentById = new Map<string, string | null>()
+                                            nodes.forEach(n => { if (n.type === 'stepNode') parentById.set(String(n.id), ((n.data as any)?.parentId ?? null) as any) })
+                                            const descendants = new Set<string>()
+                                            const stack = [targetId]
+                                            while (stack.length) {
+                                                const cur = stack.pop() as string
+                                                for (const [id, pid] of parentById) {
+                                                    if (pid && String(pid) === String(cur) && !descendants.has(id)) {
+                                                        descendants.add(id)
+                                                        stack.push(id)
+                                                    }
+                                                }
+                                            }
+                                            const disallowed = new Set<string>([targetId, ...Array.from(descendants)])
+                                            return nodes
+                                                .filter(n => n.type === 'stepNode' && !disallowed.has(String(n.id)))
+                                                .filter(n => (n.data as any)?.label?.toLowerCase()?.includes(reparentPicker.query.toLowerCase()))
+                                                .map(n => (
+                                                    <button key={n.id}
+                                                        className="w-full text-left px-2 py-1 hover:bg-gray-800 text-gray-200"
+                                                        onClick={() => {
+                                                            let nextNodes: Node[] = []
+                                                            setNodes(ns => {
+                                                                nextNodes = ns.map(x => x.id === reparentPicker.nodeId ? { ...x, data: { ...(x.data as any), parentId: String(n.id) } } : x)
+                                                                return nextNodes
+                                                            })
+                                                            queueMicrotask(() => rebuildTreeFromNodes(nextNodes))
+                                                            setDirtyEdits(prev => ({ ...prev, [reparentPicker.nodeId]: { ...(prev[reparentPicker.nodeId] || {}), parentId: String(n.id) } }))
+                                                            setParentQuery(String(n.id))
+                                                            showChildrenOf(String(n.id))
+                                                            closeReparentPicker()
+                                                        }}
+                                                    >
+                                                        {(n.data as any)?.label || 'Step'}
+                                                    </button>
+                                                ))
+                                        })()}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
@@ -1727,21 +1844,21 @@ export default function WorkflowPage() {
 }
 
 // Sidebar tree components
-function SidebarTree({ roots, expanded, onToggle, onSelect, selectedId }: { roots: TreeItem[]; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void; selectedId?: string | null }) {
+function SidebarTree({ roots, expanded, onToggle, onSelect, selectedId, onContextMenu }: { roots: TreeItem[]; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void; selectedId?: string | null; onContextMenu?: (e: React.MouseEvent, id: string) => void }) {
     return (
         <div className="px-2">
             {roots.length === 0 ? (
                 <div className="text-xs text-gray-500 px-2 py-2">No steps</div>
             ) : (
                 roots.map((r, i) => (
-                    <TreeRow key={r.id} item={r} level={0} index={i + 1} prefix="" expanded={expanded} onToggle={onToggle} onSelect={onSelect} selectedId={selectedId || undefined} />
+                    <TreeRow key={r.id} item={r} level={0} index={i + 1} prefix="" expanded={expanded} onToggle={onToggle} onSelect={onSelect} selectedId={selectedId || undefined} onContextMenu={onContextMenu} />
                 ))
             )}
         </div>
     )
 }
 
-function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect, selectedId }: { item: TreeItem; level: number; index: number; prefix: string; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void; selectedId?: string }) {
+function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect, selectedId, onContextMenu }: { item: TreeItem; level: number; index: number; prefix: string; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void; selectedId?: string; onContextMenu?: (e: React.MouseEvent, id: string) => void }) {
     const hasChildren = item.children.length > 0
     const isOpen = expanded[item.id]
     const numberLabel = prefix ? `${prefix}.${index}` : `${index}`
@@ -1750,6 +1867,7 @@ function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect, sel
         <div className="select-none">
             <div className="flex items-center gap-1 py-1"
                 style={{ paddingLeft: 8 + level * 12 }}
+                onContextMenu={onContextMenu ? (e) => onContextMenu(e, item.id) : undefined}
             >
                 {hasChildren ? (
                     <button
@@ -1792,7 +1910,7 @@ function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect, sel
             {hasChildren && isOpen && (
                 <div>
                     {item.children.map((c, idx) => (
-                        <TreeRow key={c.id} item={c} level={level + 1} index={idx + 1} prefix={numberLabel} expanded={expanded} onToggle={onToggle} onSelect={onSelect} selectedId={selectedId} />
+                        <TreeRow key={c.id} item={c} level={level + 1} index={idx + 1} prefix={numberLabel} expanded={expanded} onToggle={onToggle} onSelect={onSelect} selectedId={selectedId} onContextMenu={onContextMenu} />
                     ))}
                 </div>
             )}
