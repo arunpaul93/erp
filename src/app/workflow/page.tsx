@@ -525,18 +525,24 @@ export default function WorkflowPage() {
             layoutOptions: {
                 'elk.algorithm': 'layered',
                 'elk.direction': 'RIGHT',
+                // Primary horizontal spacing between layers/columns
                 'elk.spacing.nodeNodeBetweenLayers': String(colGap),
                 'elk.layered.spacing.nodeNodeBetweenLayers': String(colGap),
+                // Additional layer spacing options to ensure consistency
+                'elk.layered.spacing.edgeNodeBetweenLayers': String(Math.floor(colGap * 0.5)),
+                'elk.layered.spacing.edgeEdgeBetweenLayers': String(Math.floor(colGap * 0.3)),
                 // Vertical spacing within a layer (rows)
                 'elk.spacing.nodeNode': String(rowGap),
                 // Keep separate components/flows apart vertically as well
                 'elk.spacing.componentComponent': String(rowGap),
-                // Base value to propagate spacing to related measures
-                'elk.layered.spacing.baseValue': String(rowGap),
+                // Ensure uniform spacing by setting base value consistently
+                'elk.layered.spacing.baseValue': String(colGap),
                 'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
                 'elk.layered.crossingMinimization.semiInteractive': 'true',
                 // Try to respect existing positions when possible
                 'elk.interactiveLayout': 'true',
+                // Force consistent layer assignment
+                'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
             },
             children: rawNodes.map((n) => {
                 const existing = layoutPosRef.current.get(n.id)
