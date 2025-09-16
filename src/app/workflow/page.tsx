@@ -535,12 +535,19 @@ export default function WorkflowPage() {
                 'elk.layered.spacing.baseValue': String(rowGap),
                 'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
                 'elk.layered.crossingMinimization.semiInteractive': 'true',
+                // Try to respect existing positions when possible
+                'elk.interactiveLayout': 'true',
             },
-            children: rawNodes.map((n) => ({
-                id: n.id,
-                width: ((n.style as any)?.width ?? 220),
-                height: (n.style as any)?.height ?? 80,
-            })),
+            children: rawNodes.map((n) => {
+                const existing = layoutPosRef.current.get(n.id)
+                return {
+                    id: n.id,
+                    width: ((n.style as any)?.width ?? 220),
+                    height: (n.style as any)?.height ?? 80,
+                    // Provide existing position as hint to ELK
+                    ...(existing ? { x: existing.x, y: existing.y } : {})
+                }
+            }),
             edges: rawEdges.map((e) => ({ id: String(e.id), sources: [String(e.source)], targets: [String(e.target)] }))
         }
 
@@ -779,12 +786,12 @@ export default function WorkflowPage() {
             const newId = newRows?.[0]?.id as string
             if (!newId) throw new Error('Failed to create step')
 
-            // Add to local graph and re-layout without full refresh
+            // Add to local graph and re-layout with position hints
             const newNode: Node = {
                 id: newId,
                 type: 'stepNode',
                 data: { label: 'New Node', description: '', parentId: parentFromUrl },
-                position: { x: 0, y: 0 },
+                position: { x: 0, y: 0 }, // ELK will position this
                 style: {
                     border: '1px solid #1f2937',
                     background: 'rgba(17,24,39,0.9)',
@@ -1003,12 +1010,12 @@ export default function WorkflowPage() {
                 .limit(1)
             if (flowErr) throw flowErr
 
-            // 3) Update local graph and re-layout; start editing new node
+            // 3) Update local graph and re-layout with position hints; start editing new node
             const newNode: Node = {
                 id: newStepId,
                 type: 'stepNode',
                 data: { label: 'New Node', description: '', parentId: parentFromUrl },
-                position: { x: 0, y: 0 },
+                position: { x: 0, y: 0 }, // ELK will position this
                 style: { border: '1px solid #1f2937', background: 'rgba(17,24,39,0.9)', color: '#e5e7eb' }
             }
             const newEdge: Edge = {
