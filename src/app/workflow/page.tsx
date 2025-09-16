@@ -116,7 +116,7 @@ interface TreeItem {
 
 export default function WorkflowPage() {
     const { user, loading } = useAuth()
-    const { selectedOrgId } = useOrg()
+    const { selectedOrgId, orgs } = useOrg()
     const router = useRouter()
 
     const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[])
@@ -146,6 +146,14 @@ export default function WorkflowPage() {
     const flowRef = React.useRef<ReactFlowInstance | null>(null)
     // Keep last computed layout positions (from ELK) so we can snap nodes back after drag
     const layoutPosRef = React.useRef<Map<string, { x: number; y: number }>>(new Map())
+    // Track topology signature to trigger auto layout when structure changes
+    const layoutSigRef = React.useRef<string>("")
+    const computeTopologySignature = useCallback((ns: Node[], es: Edge[]) => {
+        const nodeIds = ns.filter((n) => n.type === 'stepNode').map((n) => String(n.id)).sort().join(',')
+        const edgePairs = es.map((e) => `${String(e.source)}->${String(e.target)}`).sort().join(',')
+        return `${nodeIds}|${edgePairs}`
+    }, [])
+    // No special view persistence
     // Fiber optics animation toggle
     const [animateEdges, setAnimateEdges] = useState<boolean>(false)
     // Layout config state
@@ -193,6 +201,38 @@ export default function WorkflowPage() {
             localStorage.setItem('workflow_row_gap', String(y))
         } catch { }
     }, [])
+
+    // Show only root nodes (parent_step_id is null) by querying backend, hide others, and fit view
+    const showRootNodesOnly = useCallback(async () => {
+        if (!selectedOrgId) return
+        try {
+            const { data: roots, error: rootsErr } = await supabase
+                .from('process_step')
+                .select('id')
+                .or(`organisation_id.is.null,organisation_id.eq.${selectedOrgId}`)
+                .is('parent_step_id', null)
+            if (rootsErr) throw rootsErr
+            const rootIds = new Set<string>((roots || []).map((r: any) => String(r.id)))
+            setNodes((ns) => ns.map((n) => ({
+                ...n,
+                hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
+            })))
+            setEdges((es) => es.map((e) => ({
+                ...e,
+                hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
+            })))
+            queueMicrotask(() => flowRef.current?.fitView({ padding: 0.2, duration: 0 }))
+        } catch (e: any) {
+            setError(e.message || 'Failed to filter root nodes')
+        }
+    }, [selectedOrgId, setNodes, setEdges])
+
+    // Simple fit helpers only
+    const fitAll = useCallback(() => flowRef.current?.fitView({ padding: 0.15, duration: 0 }), [])
+    const fitRoots = useCallback(() => {
+        const roots = nodes.filter((n) => n.type === 'stepNode' && !((n.data as any)?.parentId))
+        if (roots.length) flowRef.current?.fitView({ nodes: roots as any, padding: 0.2, duration: 0 })
+    }, [nodes])
     // reactFlow hook not needed since we recompute layout; we don't set explicit position on create
 
     // Redirect to login if not authenticated
@@ -401,6 +441,22 @@ export default function WorkflowPage() {
         return () => { cancelled = true }
     }, [colGap, rowGap])
 
+    // Auto layout whenever topology (node/edge set) changes
+    useEffect(() => {
+        const sig = computeTopologySignature(nodes, edges)
+        if (sig === layoutSigRef.current) return
+        layoutSigRef.current = sig
+        let cancelled = false
+        ;(async () => {
+            const { nodes: n, edges: e } = await applyElkLayout(nodes, edges)
+            if (!cancelled) {
+                setNodes(n)
+                setEdges(e)
+            }
+        })()
+        return () => { cancelled = true }
+    }, [nodes, edges, computeTopologySignature, applyElkLayout])
+
     // When animation toggle changes, restyle edges without moving nodes
     useEffect(() => {
         // Only restyle edges based on animate toggle; node visuals remain static
@@ -460,29 +516,25 @@ export default function WorkflowPage() {
             const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, edgeList)
             setNodes(laidNodes)
             setEdges(laidEdges)
+            layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
 
-            // Build tree from steps for sidebar
+            // Sidebar index: only nodes that are referenced in parent_step_id (i.e., parents)
+            const allowed = new Set<string>((steps || []).map((s) => s.parent_step_id).filter((v): v is string => !!v))
             const byId: Record<string, TreeItem> = {}
             for (const s of (steps || [])) {
-                byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
+                if (allowed.has(s.id)) byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
             }
             const roots: TreeItem[] = []
             for (const s of (steps || [])) {
-                if (s.parent_step_id && byId[s.parent_step_id]) {
-                    byId[s.parent_step_id].children.push(byId[s.id])
-                } else {
-                    // No parent => hierarchy 0
-                    roots.push(byId[s.id])
-                }
+                if (!allowed.has(s.id)) continue
+                const pid = s.parent_step_id
+                if (pid && byId[pid]) byId[pid].children.push(byId[s.id])
+                else roots.push(byId[s.id])
             }
-            // Sort siblings by name for stable order
-            const sortTree = (items: TreeItem[]) => {
-                items.sort((a, b) => a.name.localeCompare(b.name))
-                items.forEach((it) => sortTree(it.children))
-            }
+            const sortTree = (items: TreeItem[]) => { items.sort((a, b) => a.name.localeCompare(b.name)); items.forEach((it) => sortTree(it.children)) }
             sortTree(roots)
-            setTree(roots)
-            // Initialize expanded with roots if empty (first load)
+        setTree(roots)
+            // Initialize expanded with filtered roots if empty (first load)
             setExpanded((prev) => {
                 if (Object.keys(prev).length) return prev
                 const next: Record<string, boolean> = {}
@@ -501,14 +553,17 @@ export default function WorkflowPage() {
         const items: { id: string; name: string; parentId?: string | null }[] = ns
             .filter((n) => n.type === 'stepNode')
             .map((n) => ({ id: n.id, name: (n.data as any)?.label || 'Step', parentId: (n.data as any)?.parentId ?? null }))
+        const allowed = new Set<string>(items.map((i) => i.parentId).filter((v): v is string => !!v))
         const byId: Record<string, TreeItem> = {}
-        for (const it of items) byId[it.id] = { id: it.id, name: it.name, children: [] }
+        for (const it of items) if (allowed.has(it.id)) byId[it.id] = { id: it.id, name: it.name, children: [] }
         const roots: TreeItem[] = []
         for (const it of items) {
-            if (it.parentId && byId[it.parentId]) byId[it.parentId].children.push(byId[it.id])
+            if (!allowed.has(it.id)) continue
+            const pid = it.parentId
+            if (pid && byId[pid]) byId[pid].children.push(byId[it.id])
             else roots.push(byId[it.id])
         }
-        const sortTree = (arr: TreeItem[]) => { arr.sort((a, b) => a.name.localeCompare(b.name)); arr.forEach(c => sortTree(c.children)) }
+        const sortTree = (arr: TreeItem[]) => { arr.sort((a, b) => a.name.localeCompare(b.name)); arr.forEach((c) => sortTree(c.children)) }
         sortTree(roots)
         setTree(roots)
     }, [])
@@ -524,7 +579,7 @@ export default function WorkflowPage() {
             return
         }
         try {
-            const { error: insertErr } = await supabase
+            const { data: newRows, error: insertErr } = await supabase
                 .from('process_step')
                 .insert({
                     organisation_id: selectedOrgId,
@@ -533,12 +588,33 @@ export default function WorkflowPage() {
                     metadata: {},
                     parent_step_id: null,
                 })
+                .select('id')
+                .limit(1)
             if (insertErr) throw insertErr
-            await fetchData()
+            const newId = newRows?.[0]?.id as string
+            if (!newId) throw new Error('Failed to create step')
+
+            // Add to local graph and re-layout without full refresh
+            const newNode: Node = {
+                id: newId,
+                type: 'stepNode',
+                data: { label: 'New Node', description: '', parentId: null },
+                position: { x: 0, y: 0 },
+                style: {
+                    border: '1px solid #1f2937',
+                    background: 'rgba(17,24,39,0.9)',
+                    color: '#e5e7eb',
+                }
+            }
+            const allNodes = [...nodes, newNode]
+            const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, edges)
+            setNodes(laidNodes)
+            setEdges(laidEdges)
+            layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
         } catch (e: any) {
             setError(e.message || 'Failed to add node')
         }
-    }, [selectedOrgId, fetchData])
+    }, [selectedOrgId, nodes, edges, applyElkLayout])
 
     // Track edits in local state and update rendered node label live
     const startEditingNode = useCallback((nodeId: string) => {
@@ -628,18 +704,18 @@ export default function WorkflowPage() {
                     .in('id', nodeDeletes as any)
                 if (delNodesErr) throw delNodesErr
             }
-            setDirtyEdits({})
-            setEdgeDirtyEdits({})
-            setPendingNodeDeletes({})
-            setPendingEdgeDeletes({})
-            setEditingNodeId(null)
-            await fetchData()
+        // Clear local dirty flags; graph is already up-to-date locally (soft-deletes applied earlier)
+        setDirtyEdits({})
+        setEdgeDirtyEdits({})
+        setPendingNodeDeletes({})
+        setPendingEdgeDeletes({})
+        setEditingNodeId(null)
         } catch (e: any) {
             setError(e.message || 'Failed to save changes')
         } finally {
             setIsSaving(false)
         }
-    }, [dirtyEdits, edgeDirtyEdits, pendingNodeDeletes, pendingEdgeDeletes, selectedOrgId, fetchData])
+    }, [dirtyEdits, edgeDirtyEdits, pendingNodeDeletes, pendingEdgeDeletes, selectedOrgId])
 
     const onConnect = useCallback(async (connection: any) => {
         // Persist a new flow edge between two steps, then refresh
@@ -647,7 +723,7 @@ export default function WorkflowPage() {
             // Mark that a valid connection occurred so onConnectEnd won't create a new node
             didConnectRef.current = true
             if (!selectedOrgId || !connection?.source || !connection?.target) return
-            const { error: flowErr } = await supabase
+            const { data: flowRows, error: flowErr } = await supabase
                 .from('process_flow_edge')
                 .insert({
                     organisation_id: selectedOrgId,
@@ -656,14 +732,26 @@ export default function WorkflowPage() {
                     metadata: {},
                     label: null,
                 })
+                .select('id, label')
+                .limit(1)
             if (flowErr) throw flowErr
-            await fetchData()
+            const newEdgeId = String(flowRows?.[0]?.id)
+            // Update local edges without re-fetching
+            const newEdge: Edge = {
+                id: newEdgeId,
+                source: String(connection.source),
+                target: String(connection.target),
+                type: 'electron',
+                label: undefined,
+                data: { labelText: '', animate: animateEdges } as any,
+            }
+            setEdges((prev) => styleEdges([...prev, newEdge]))
         } catch (e: any) {
             // Reset flag on failure so user can retry and pane-drop works
             didConnectRef.current = false
             setError(e.message || 'Failed to connect nodes')
         }
-    }, [selectedOrgId, fetchData])
+    }, [selectedOrgId, animateEdges, styleEdges])
 
     // Drag-to-create: start tracking source node
     const onConnectStart = useCallback((_: any, params: any) => {
@@ -706,18 +794,40 @@ export default function WorkflowPage() {
             if (!newStepId) throw new Error('Failed to create step')
 
             // 2) Create the flow connecting source -> new step
-            const { error: flowErr } = await supabase
+            const { data: flowRows, error: flowErr } = await supabase
                 .from('process_flow_edge')
                 .insert({ organisation_id: selectedOrgId, from_step_id: sourceId, to_step_id: newStepId, metadata: {}, label: null })
+                .select('id')
+                .limit(1)
             if (flowErr) throw flowErr
 
-            // 3) Refresh and focus editing on new node
-            await fetchData()
+            // 3) Update local graph and re-layout; start editing new node
+            const newNode: Node = {
+                id: newStepId,
+                type: 'stepNode',
+                data: { label: 'New Node', description: '', parentId: null },
+                position: { x: 0, y: 0 },
+                style: { border: '1px solid #1f2937', background: 'rgba(17,24,39,0.9)', color: '#e5e7eb' }
+            }
+            const newEdge: Edge = {
+                id: String(flowRows?.[0]?.id || `${sourceId}-${newStepId}`),
+                source: String(sourceId),
+                target: String(newStepId),
+                type: 'electron',
+                label: undefined,
+                data: { labelText: '', animate: animateEdges } as any,
+            }
+            const allNodes = [...nodes, newNode]
+            const styledEdges = styleEdges([...edges, newEdge])
+            const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, styledEdges)
+            setNodes(laidNodes)
+            setEdges(laidEdges)
+            layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
             setEditingNodeId(newStepId)
         } catch (e: any) {
             setError(e.message || 'Failed to create connected node')
         }
-    }, [selectedOrgId, fetchData])
+    }, [selectedOrgId, nodes, edges, applyElkLayout, styleEdges, animateEdges])
 
     // When a node drag ends, snap it back to the last ELK layout position (with CSS transition)
     const onNodeDragStop = useCallback((_: any, node: Node) => {
@@ -929,16 +1039,31 @@ export default function WorkflowPage() {
                         </div>
                         {sidebarOpen && (
                             <div className="h-[calc(100%-36px)] overflow-auto py-2">
+                {/* Company name as first item */}
+                                <div className="px-2 mb-1">
+                                    <button
+                                        type="button"
+                                        onClick={showRootNodesOnly}
+                                        className="w-full text-left truncate text-xs text-yellow-300 font-semibold hover:text-yellow-200"
+                                        title={(orgs.find(o => o.id === selectedOrgId)?.name || 'Organisation') + ' — show top-level nodes'}
+                                    >
+                                        {orgs.find(o => o.id === selectedOrgId)?.name || 'Organisation'}
+                                    </button>
+                                </div>
                                 <SidebarTree
                                     roots={tree}
                                     expanded={expanded}
                                     onToggle={(id) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))}
-                                    onSelect={(id) => {
+                                    onSelect={async (id) => {
+                                        // Full refresh from backend
+                                        await fetchData()
                                         // Select and focus node in canvas
                                         setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === id })))
                                         const instance = flowRef.current
-                                        const node = nodes.find((n) => n.id === id)
-                                        if (instance && node) instance.fitView({ nodes: [node as any], padding: 0.2, duration: 500 })
+                                        if (instance) {
+                                            const nodeNow = (instance as any).getNodes ? (instance as any).getNodes().find((n: any) => n.id === id) : nodes.find((n) => n.id === id)
+                                            if (nodeNow) instance.fitView({ nodes: [nodeNow as any], padding: 0.2, duration: 0 })
+                                        }
                                     }}
                                 />
                             </div>
@@ -1115,17 +1240,18 @@ function SidebarTree({ roots, expanded, onToggle, onSelect }: { roots: TreeItem[
             {roots.length === 0 ? (
                 <div className="text-xs text-gray-500 px-2 py-2">No steps</div>
             ) : (
-                roots.map((r) => (
-                    <TreeRow key={r.id} item={r} level={0} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+                roots.map((r, i) => (
+                    <TreeRow key={r.id} item={r} level={0} index={i + 1} prefix="" expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
                 ))
             )}
         </div>
     )
 }
 
-function TreeRow({ item, level, expanded, onToggle, onSelect }: { item: TreeItem; level: number; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void }) {
+function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect }: { item: TreeItem; level: number; index: number; prefix: string; expanded: Record<string, boolean>; onToggle: (id: string) => void; onSelect: (id: string) => void }) {
     const hasChildren = item.children.length > 0
     const isOpen = expanded[item.id]
+    const numberLabel = prefix ? `${prefix}.${index}` : `${index}`
     return (
         <div className="select-none">
             <div className="flex items-center gap-1 py-1"
@@ -1149,15 +1275,15 @@ function TreeRow({ item, level, expanded, onToggle, onSelect }: { item: TreeItem
                 <button
                     onClick={() => onSelect(item.id)}
                     className="truncate text-left text-xs text-gray-200 hover:text-yellow-300"
-                    title={item.name}
+                    title={`${numberLabel} ${item.name}`}
                 >
-                    {item.name}
+                    <span className="text-gray-400 mr-1">{numberLabel}</span> {item.name}
                 </button>
             </div>
             {hasChildren && isOpen && (
                 <div>
-                    {item.children.map((c) => (
-                        <TreeRow key={c.id} item={c} level={level + 1} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
+                    {item.children.map((c, idx) => (
+                        <TreeRow key={c.id} item={c} level={level + 1} index={idx + 1} prefix={numberLabel} expanded={expanded} onToggle={onToggle} onSelect={onSelect} />
                     ))}
                 </div>
             )}
