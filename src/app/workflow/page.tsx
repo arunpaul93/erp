@@ -1615,8 +1615,8 @@ export default function WorkflowPage() {
                                     e.preventDefault();
                                     openEdgeLabelEditor(e.clientX, e.clientY, String(ed.id))
                                 }}
-                                selectionOnDrag
-                                panOnDrag={[1, 2]}
+                                selectionOnDrag={false}
+                                panOnDrag
                                 onPaneClick={() => {
                                     setEditingNodeId(null);
                                     closeMenu();
