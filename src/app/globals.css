@@ -115,7 +115,8 @@ body {
   stroke: #f59e0b;
   stroke-width: 2;
   stroke-linecap: round;
-  stroke-dasharray: 6 10; /* dot-like pulses spaced out */
+  stroke-dasharray: 6 10;
+  /* dot-like pulses spaced out */
   filter: drop-shadow(0 0 2px rgba(245, 158, 11, 0.8)) drop-shadow(0 0 6px rgba(245, 158, 11, 0.6));
   animation: fiberDash 1.2s linear infinite;
 }
@@ -126,8 +127,13 @@ body {
 }
 
 @keyframes fiberDash {
-  from { stroke-dashoffset: 0; }
-  to   { stroke-dashoffset: -200; }
+  from {
+    stroke-dashoffset: 0;
+  }
+
+  to {
+    stroke-dashoffset: -200;
+  }
 }
 
 /* Make label backdrop not overpower the glow */
@@ -137,6 +143,11 @@ body {
 
 /* Spin used for node perimeter conic-gradient ring */
 @keyframes rf-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }

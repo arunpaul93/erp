@@ -12,7 +12,7 @@ export default function HomePage() {
   const cards = [
     { title: 'Structure Graph', desc: 'Visualize organizational structure and relationships.', path: '/structure-graph' },
     { title: 'Business Plan', desc: 'Strategic goals and initiatives.', path: '/business-plan' },
-  { title: 'Workflow', desc: 'Process steps and flows visualized.', path: '/workflow' },
+    { title: 'Workflow', desc: 'Process steps and flows visualized.', path: '/workflow' },
   ]
 
   useEffect(() => {
