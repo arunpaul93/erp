@@ -32,6 +32,8 @@ function StepNode(props: any) {
     const { label, description, editing, onChange } = data
     // Auto-expand description textarea when edit mode starts
     const descRef = React.useRef<HTMLTextAreaElement | null>(null)
+    // View-mode autosize for label to keep wrapping nice while using native control rendering
+    const viewLabelRef = React.useRef<HTMLTextAreaElement | null>(null)
     useEffect(() => {
         if (editing && descRef.current) {
             const el = descRef.current
@@ -40,10 +42,34 @@ function StepNode(props: any) {
         }
     }, [editing, description])
 
+    // When not editing, autosize the readOnly label textarea
+    useEffect(() => {
+        if (!editing && viewLabelRef.current) {
+            const el = viewLabelRef.current
+            el.style.height = 'auto'
+            el.style.height = `${el.scrollHeight}px`
+        }
+    }, [editing, label])
+
     if (editing) {
         return (
-            <div className="relative" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
-                <div className="relative z-10 p-2 flex flex-col gap-2">
+            <div
+                className="relative"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                    transform: 'translate3d(0, 0, 0)',
+                    backfaceVisibility: 'hidden',
+                    willChange: 'transform'
+                }}
+            >
+                <div
+                    className="relative z-10 p-2 flex flex-col gap-2"
+                    style={{
+                        transform: 'translate3d(0, 0, 0)',
+                        backfaceVisibility: 'hidden'
+                    }}
+                >
                     <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
                     <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
                     <input
@@ -51,9 +77,24 @@ function StepNode(props: any) {
                         onChange={(e) => onChange && onChange(e.target.value, description || '')}
                         placeholder="Name"
                         className="bg-gray-900 text-gray-100 border border-gray-700 rounded px-2 py-1 text-sm w-full"
-                        style={{ wordBreak: 'keep-all', overflowWrap: 'normal' }}
+                        style={{
+                            wordBreak: 'keep-all',
+                            overflowWrap: 'normal',
+                            transform: 'translate3d(0, 0, 0)',
+                            backfaceVisibility: 'hidden',
+                            WebkitFontSmoothing: 'subpixel-antialiased' as any,
+                            textRendering: 'optimizeSpeed' as any
+                        }}
                     />
-                    <label className="text-[11px] text-gray-400">Description</label>
+                    <label
+                        className="text-[11px] text-gray-400"
+                        style={{
+                            transform: 'translate3d(0, 0, 0)',
+                            WebkitFontSmoothing: 'subpixel-antialiased' as any
+                        }}
+                    >
+                        Description
+                    </label>
                     <textarea
                         ref={descRef}
                         defaultValue={description || ''}
@@ -65,7 +106,15 @@ function StepNode(props: any) {
                         }}
                         placeholder="Description"
                         className="bg-gray-900 text-gray-300 border border-gray-700 rounded px-2 py-1 text-xs w-full resize-none overflow-hidden"
-                        style={{ height: 'auto', wordBreak: 'keep-all', overflowWrap: 'normal' }}
+                        style={{
+                            height: 'auto',
+                            wordBreak: 'keep-all',
+                            overflowWrap: 'normal',
+                            transform: 'translate3d(0, 0, 0)',
+                            backfaceVisibility: 'hidden',
+                            WebkitFontSmoothing: 'subpixel-antialiased' as any,
+                            textRendering: 'optimizeSpeed' as any
+                        }}
                     />
                 </div>
             </div>
@@ -73,16 +122,50 @@ function StepNode(props: any) {
     }
 
     return (
-        <div className="relative overflow-visible">
-            <div className="relative z-10 px-3 py-6 flex items-center justify-center text-center">
+        <div
+            className="relative overflow-visible"
+            style={{
+                transform: 'translate3d(0, 0, 0)',
+                transformStyle: 'preserve-3d' as any,
+                backfaceVisibility: 'hidden',
+                willChange: 'transform',
+                imageRendering: 'crisp-edges'
+            }}
+        >
+            <div
+                className="relative z-10 px-3 py-6 flex items-center justify-center text-center"
+                style={{
+                    transform: 'translate3d(0, 0, 0)',
+                    backfaceVisibility: 'hidden',
+                    willChange: 'transform'
+                }}
+            >
                 <Handle type="target" position={Position.Left} className="!bg-yellow-400" />
                 <Handle type="source" position={Position.Right} className="!bg-yellow-400" />
-                <div
-                    className="text-sm font-semibold text-gray-100 whitespace-pre-wrap break-normal leading-snug"
-                    style={{ overflowWrap: 'normal', wordBreak: 'keep-all' as any, maxWidth: '100%' }}
-                >
-                    {label || 'Step'}
-                </div>
+                <textarea
+                    ref={viewLabelRef}
+                    readOnly
+                    value={label || 'Step'}
+                    rows={1}
+                    spellCheck={false}
+                    className="text-sm font-medium text-gray-100 leading-snug bg-transparent border-0 resize-none overflow-hidden text-center w-full"
+                    style={{
+                        whiteSpace: 'pre-wrap',
+                        overflowWrap: 'break-word',
+                        wordBreak: 'break-word',
+                        maxWidth: '100%',
+                        // Use native control rendering for crisper zoomed text
+                        transform: 'translate3d(0, 0, 0)',
+                        backfaceVisibility: 'hidden',
+                        willChange: 'transform',
+                        outline: 'none',
+                        boxShadow: 'none',
+                        padding: 0,
+                        margin: 0,
+                        caretColor: 'transparent',
+                        pointerEvents: 'none',
+                    }}
+                />
             </div>
         </div>
     )
@@ -405,7 +488,9 @@ export default function WorkflowPage() {
 
         const posById = new Map<string, { x: number; y: number }>()
         for (const c of res.children || []) {
-            posById.set(c.id, { x: c.x || 0, y: c.y || 0 })
+            const x = typeof c.x === 'number' ? Math.round(c.x) : 0
+            const y = typeof c.y === 'number' ? Math.round(c.y) : 0
+            posById.set(c.id, { x, y })
         }
 
         // Remember positions for snap-back on drag stop
@@ -523,19 +608,18 @@ export default function WorkflowPage() {
             setEdges(laidEdges)
             layoutSigRef.current = computeTopologySignature(laidNodes, laidEdges)
 
-            // Sidebar index: only nodes that are referenced in parent_step_id (i.e., parents)
-            const allowed = new Set<string>((steps || []).map((s) => s.parent_step_id).filter((v): v is string => !!v))
+            // Sidebar index: show nodes where parent_step_id is null as top-level, and include their hierarchy
             const byId: Record<string, TreeItem> = {}
             for (const s of (steps || [])) {
-                if (allowed.has(s.id)) byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
+                byId[s.id] = { id: s.id, name: s.name || 'Step', children: [] }
             }
-            const roots: TreeItem[] = []
             for (const s of (steps || [])) {
-                if (!allowed.has(s.id)) continue
                 const pid = s.parent_step_id
                 if (pid && byId[pid]) byId[pid].children.push(byId[s.id])
-                else roots.push(byId[s.id])
             }
+            const roots: TreeItem[] = (steps || [])
+                .filter((s) => !s.parent_step_id)
+                .map((s) => byId[s.id])
             const sortTree = (items: TreeItem[]) => { items.sort((a, b) => a.name.localeCompare(b.name)); items.forEach((it) => sortTree(it.children)) }
             sortTree(roots)
             setTree(roots)
@@ -1039,9 +1123,22 @@ export default function WorkflowPage() {
             ) : (
                 <div className="h-[calc(100vh-64px)] flex">
                     {/* Sidebar: hierarchical index */}
-                    <div className={`${sidebarOpen ? 'w-72' : 'w-8'} h-full border-r border-gray-800 bg-gray-900/60 backdrop-blur-sm transition-[width] duration-200 overflow-hidden`}>
+                    <div className={`${sidebarOpen ? 'w-72' : 'w-8'} h-full border-r border-gray-800 bg-gray-900/60 backdrop-blur-sm transition-[width] duration-200 overflow-hidden relative`}>
+                        {/* Always-visible sidebar toggle */}
+                        <button
+                            className="absolute top-1 right-1 z-20 p-1 rounded hover:bg-gray-800 text-gray-300"
+                            aria-label={sidebarOpen ? 'Collapse' : 'Expand'}
+                            title={sidebarOpen ? 'Collapse' : 'Expand'}
+                            onClick={() => setSidebarOpen((v) => !v)}
+                        >
+                            {sidebarOpen ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M12.78 15.28a.75.75 0 0 1-1.06 0l-4.5-4.5a.75.75 0 0 1 0-1.06l4.5-4.5a.75.75 0 1 1 1.06 1.06L8.56 10l4.22 4.22a.75.75 0 0 1 0 1.06Z" clipRule="evenodd" /></svg>
+                            ) : (
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4"><path fillRule="evenodd" d="M7.22 4.72a.75.75 0 0 1 1.06 0l4.5 4.5a.75.75 0 0 1 0 1.06l-4.5 4.5a.75.75 0 1 1-1.06-1.06L11.44 10 7.22 5.78a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
+                            )}
+                        </button>
                         <div className="h-9 flex items-center justify-between px-2 border-b border-gray-800">
-                            <div className="text-xs font-semibold text-gray-300">Index</div>
+                            <div className={`text-xs font-semibold text-gray-300 ${sidebarOpen ? 'block' : 'hidden'}`}>Index</div>
                             <button
                                 className="p-1 rounded hover:bg-gray-800 text-gray-300"
                                 aria-label={sidebarOpen ? 'Collapse' : 'Expand'}
@@ -1277,9 +1374,11 @@ function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect }: {
             >
                 {hasChildren ? (
                     <button
+                        type="button"
                         className="p-0.5 rounded hover:bg-gray-800 text-gray-300"
-                        onClick={() => onToggle(item.id)}
+                        onClick={(e) => { e.stopPropagation(); onToggle(item.id) }}
                         aria-label={isOpen ? 'Collapse' : 'Expand'}
+                        aria-expanded={isOpen}
                     >
                         {isOpen ? (
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5"><path fillRule="evenodd" d="M5.22 7.22a.75.75 0 0 1 1.06 0L10 10.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.28a.75.75 0 0 1 0-1.06Z" clipRule="evenodd" /></svg>
@@ -1288,14 +1387,23 @@ function TreeRow({ item, level, index, prefix, expanded, onToggle, onSelect }: {
                         )}
                     </button>
                 ) : (
-                    <span className="inline-block h-1 w-1 rounded-full bg-gray-600 ml-1" />
+                    // Spacer to align with chevron width
+                    <span className="inline-block w-3.5" />
                 )}
                 <button
-                    onClick={() => onSelect(item.id)}
+                    type="button"
+                    onClick={(e) => {
+                        e.stopPropagation()
+                        if (hasChildren) onToggle(item.id)
+                        else onSelect(item.id)
+                    }}
+                    onDoubleClick={(e) => { e.stopPropagation(); onSelect(item.id) }}
                     className="truncate text-left text-xs text-gray-200 hover:text-yellow-300"
                     title={`${numberLabel} ${item.name}`}
+                    role={hasChildren ? 'treeitem' : undefined}
+                    aria-expanded={hasChildren ? isOpen : undefined}
                 >
-                    <span className="text-gray-400 mr-1">{numberLabel}</span> {item.name}
+                    <span className="text-gray-400 mr-1">{numberLabel}.</span> {item.name}
                 </button>
             </div>
             {hasChildren && isOpen && (

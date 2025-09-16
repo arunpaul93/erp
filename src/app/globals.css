@@ -25,6 +25,22 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Improve text crispness during React Flow zoom */
+.react-flow__renderer,
+.xyflow__renderer {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+
+/* Node content: prefer crisp edges and avoid blur during transforms */
+.react-flow__node,
+.xyflow__node {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
 @keyframes fadeIn {
   from {
     opacity: 0;
