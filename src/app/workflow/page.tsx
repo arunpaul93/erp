@@ -253,6 +253,12 @@ export default function WorkflowPage() {
     const [sidebarOpen, setSidebarOpen] = useState<boolean>(true)
     const [tree, setTree] = useState<TreeItem[]>([])
     const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+    // Marquee selection state
+    const [isMarqueeMode, setIsMarqueeMode] = useState<boolean>(false)
+    const [marqueeStart, setMarqueeStart] = useState<{ x: number; y: number } | null>(null)
+    const [marqueeEnd, setMarqueeEnd] = useState<{ x: number; y: number } | null>(null)
+    const [isDraggingMarquee, setIsDraggingMarquee] = useState<boolean>(false)
+
     useEffect(() => {
         try {
             const sx = localStorage.getItem('workflow_col_gap')
@@ -303,14 +309,14 @@ export default function WorkflowPage() {
     const arrangeInGrid = useCallback((nodes: Node[], gap: number = 300): Node[] => {
         const visibleNodes = nodes.filter(n => !(n as any).hidden)
         const gridSize = Math.ceil(Math.sqrt(visibleNodes.length))
-        
+
         return nodes.map(node => {
             if ((node as any).hidden) return node
-            
+
             const index = visibleNodes.findIndex(n => n.id === node.id)
             const row = Math.floor(index / gridSize)
             const col = index % gridSize
-            
+
             return {
                 ...node,
                 position: {
@@ -319,6 +325,86 @@ export default function WorkflowPage() {
                 }
             }
         })
+    }, [])
+
+    // Marquee selection functions
+    const getNodesInMarquee = useCallback((start: { x: number; y: number }, end: { x: number; y: number }) => {
+        const instance = flowRef.current
+        if (!instance) return []
+
+        const minX = Math.min(start.x, end.x)
+        const maxX = Math.max(start.x, end.x)
+        const minY = Math.min(start.y, end.y)
+        const maxY = Math.max(start.y, end.y)
+
+        return nodes.filter(node => {
+            if (node.type !== 'stepNode' || (node as any).hidden) return false
+
+            // Convert screen coordinates to flow coordinates
+            const transform = instance.getViewport()
+            const flowStartX = (minX - transform.x) / transform.zoom
+            const flowEndX = (maxX - transform.x) / transform.zoom
+            const flowStartY = (minY - transform.y) / transform.zoom
+            const flowEndY = (maxY - transform.y) / transform.zoom
+
+            const nodeWidth = ((node.style as any)?.width ?? 220)
+            const nodeHeight = 80
+
+            // Check if node overlaps with marquee rectangle in flow coordinates
+            return (
+                node.position.x < flowEndX &&
+                node.position.x + nodeWidth > flowStartX &&
+                node.position.y < flowEndY &&
+                node.position.y + nodeHeight > flowStartY
+            )
+        })
+    }, [nodes])
+
+    const handleMarqueeMouseDown = useCallback((event: React.MouseEvent) => {
+        if (!isMarqueeMode) return
+
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+        const startPos = {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top
+        }
+
+        setMarqueeStart(startPos)
+        setMarqueeEnd(startPos)
+        setIsDraggingMarquee(true)
+
+        // Clear existing selections
+        setNodes(ns => ns.map(n => ({ ...n, selected: false })))
+
+        event.preventDefault()
+        event.stopPropagation()
+    }, [isMarqueeMode, setNodes])
+
+    const handleMarqueeMouseMove = useCallback((event: React.MouseEvent) => {
+        if (!isDraggingMarquee || !marqueeStart) return
+
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+        const currentPos = {
+            x: event.clientX - rect.left,
+            y: event.clientY - rect.top
+        }
+
+        setMarqueeEnd(currentPos)
+
+        // Update node selections based on current marquee
+        const nodesInMarquee = getNodesInMarquee(marqueeStart, currentPos)
+        const selectedIds = new Set(nodesInMarquee.map(n => n.id))
+
+        setNodes(ns => ns.map(n => ({
+            ...n,
+            selected: selectedIds.has(n.id)
+        })))
+    }, [isDraggingMarquee, marqueeStart, getNodesInMarquee, setNodes])
+
+    const handleMarqueeMouseUp = useCallback(() => {
+        setIsDraggingMarquee(false)
+        setMarqueeStart(null)
+        setMarqueeEnd(null)
     }, [])
 
     // Show only direct children (nodes whose parent_step_id matches given id)
@@ -702,12 +788,12 @@ export default function WorkflowPage() {
 
             const allNodes = [...stepNodes]
             const { nodes: laidNodes, edges: laidEdges } = await applyElkLayout(allNodes, edgeList)
-            
+
             // Apply initial filtering based on URL before setting nodes
             const parentId = searchParams?.get('parent')
             let finalNodes = laidNodes
             let finalEdges = laidEdges
-            
+
             if (parentId) {
                 // Filter to children of specific parent
                 const childIds = new Set<string>(
@@ -738,11 +824,11 @@ export default function WorkflowPage() {
                     ...e,
                     hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
                 }))
-                
+
                 // Apply grid layout to root nodes
                 finalNodes = arrangeInGrid(finalNodes, Math.max(colGap, 300))
             }
-            
+
             setNodes(finalNodes)
             setEdges(finalEdges)
             layoutSigRef.current = computeTopologySignature(finalNodes, finalEdges)
@@ -818,7 +904,7 @@ export default function WorkflowPage() {
     useEffect(() => {
         const parentId = searchParams?.get('parent')
         if (!nodes.length) return
-        
+
         if (parentId) {
             // If parent param exists, filter to children of that parent
             if (appliedParentRef.current === parentId) return
@@ -1286,6 +1372,20 @@ export default function WorkflowPage() {
                         {animateEdges ? 'Animate: On' : 'Animate: Off'}
                     </button>
                     <button
+                        onClick={() => setIsMarqueeMode((v) => !v)}
+                        className={`inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium border border-gray-700 ${isMarqueeMode
+                                ? 'bg-yellow-400 hover:bg-yellow-500 text-gray-900'
+                                : 'bg-gray-800 hover:bg-gray-700 text-gray-200'
+                            }`}
+                        aria-label="Toggle marquee selection"
+                        title="Toggle marquee selection"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" strokeDasharray="5,5" />
+                        </svg>
+                        {isMarqueeMode ? 'Marquee: On' : 'Marquee: Off'}
+                    </button>
+                    <button
                         onClick={() => setShowConfig(v => !v)}
                         className="inline-flex items-center gap-2 px-2 py-1 rounded-md text-sm font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700"
                         aria-label="Layout settings"
@@ -1423,48 +1523,85 @@ export default function WorkflowPage() {
                                 </div>
                             </div>
                         )}
-                        <ReactFlow
-                            nodes={nodes}
-                            edges={edges}
-                            onNodesChange={onNodesChange}
-                            onEdgesChange={onEdgesChange}
-                            minZoom={0.01}
-                            maxZoom={50}
-                            onConnect={onConnect}
-                            onConnectStart={onConnectStart}
-                            onConnectEnd={onConnectEnd}
-                            onNodeDragStop={onNodeDragStop}
-                            onNodeDoubleClick={(_, n) => startEditingNode(String(n.id))}
-                            onEdgeDoubleClick={(e, ed) => {
-                                e.preventDefault();
-                                openEdgeLabelEditor(e.clientX, e.clientY, String(ed.id))
-                            }}
-                            onPaneClick={() => { setEditingNodeId(null); closeMenu(); closeLabelEditor(); setShowConfig(false) }}
-                            onNodeClick={(_, n) => {
-                                if (editingNodeId && String(n.id) !== editingNodeId) setEditingNodeId(null)
-                                closeMenu();
-                                closeLabelEditor();
-                                setShowConfig(false)
-                            }}
-                            onEdgeClick={() => { setEditingNodeId(null); closeMenu(); closeLabelEditor(); setShowConfig(false) }}
-                            onNodeContextMenu={(e, n) => openNodeMenu(e, String(n.id))}
-                            onEdgeContextMenu={(e, ed) => openEdgeMenu(e, String(ed.id))}
-                            onPaneContextMenu={(e) => { e.preventDefault(); closeMenu() }}
-                            nodeTypes={{ stepNode: StepNode }}
-                            edgeTypes={{ electron: ElectronEdge }}
-                            onInit={(instance) => { flowRef.current = instance }}
-                            fitView
+                        <div
+                            className="relative w-full h-full"
+                            onMouseDown={handleMarqueeMouseDown}
+                            onMouseMove={handleMarqueeMouseMove}
+                            onMouseUp={handleMarqueeMouseUp}
                         >
-                            <Background color="#1f2937" variant={BackgroundVariant.Dots} gap={16} size={1} />
-                            <Controls
-                                style={{
-                                    background: 'rgba(17, 24, 39, 0.9)', // bg-gray-900/90
-                                    color: '#e5e7eb', // text-gray-200
-                                    border: '1px solid #374151', // border-gray-700
+                            <ReactFlow
+                                nodes={nodes}
+                                edges={edges}
+                                onNodesChange={onNodesChange}
+                                onEdgesChange={onEdgesChange}
+                                minZoom={0.01}
+                                maxZoom={50}
+                                onConnect={onConnect}
+                                onConnectStart={onConnectStart}
+                                onConnectEnd={onConnectEnd}
+                                onNodeDragStop={onNodeDragStop}
+                                onNodeDoubleClick={(_, n) => startEditingNode(String(n.id))}
+                                onEdgeDoubleClick={(e, ed) => {
+                                    e.preventDefault();
+                                    openEdgeLabelEditor(e.clientX, e.clientY, String(ed.id))
                                 }}
-                                fitViewOptions={{ padding: 0.15 }}
-                            />
-                        </ReactFlow>
+                                onPaneClick={() => {
+                                    setEditingNodeId(null);
+                                    closeMenu();
+                                    closeLabelEditor();
+                                    setShowConfig(false);
+                                    if (isMarqueeMode) {
+                                        setNodes(ns => ns.map(n => ({ ...n, selected: false })));
+                                    }
+                                }}
+                                onNodeClick={(_, n) => {
+                                    if (!isMarqueeMode) {
+                                        if (editingNodeId && String(n.id) !== editingNodeId) setEditingNodeId(null)
+                                        closeMenu();
+                                        closeLabelEditor();
+                                        setShowConfig(false)
+                                    }
+                                }}
+                                onEdgeClick={() => {
+                                    if (!isMarqueeMode) {
+                                        setEditingNodeId(null);
+                                        closeMenu();
+                                        closeLabelEditor();
+                                        setShowConfig(false)
+                                    }
+                                }}
+                                onNodeContextMenu={(e, n) => !isMarqueeMode && openNodeMenu(e, String(n.id))}
+                                onEdgeContextMenu={(e, ed) => !isMarqueeMode && openEdgeMenu(e, String(ed.id))}
+                                onPaneContextMenu={(e) => { e.preventDefault(); closeMenu() }}
+                                nodeTypes={{ stepNode: StepNode }}
+                                edgeTypes={{ electron: ElectronEdge }}
+                                onInit={(instance) => { flowRef.current = instance }}
+                                fitView
+                            >
+                                <Background color="#1f2937" variant={BackgroundVariant.Dots} gap={16} size={1} />
+                                <Controls
+                                    style={{
+                                        background: 'rgba(17, 24, 39, 0.9)', // bg-gray-900/90
+                                        color: '#e5e7eb', // text-gray-200
+                                        border: '1px solid #374151', // border-gray-700
+                                    }}
+                                    fitViewOptions={{ padding: 0.15 }}
+                                />
+                            </ReactFlow>
+
+                            {/* Marquee selection overlay */}
+                            {isDraggingMarquee && marqueeStart && marqueeEnd && (
+                                <div
+                                    className="absolute border-2 border-yellow-400 bg-yellow-400/10 pointer-events-none z-50"
+                                    style={{
+                                        left: Math.min(marqueeStart.x, marqueeEnd.x),
+                                        top: Math.min(marqueeStart.y, marqueeEnd.y),
+                                        width: Math.abs(marqueeEnd.x - marqueeStart.x),
+                                        height: Math.abs(marqueeEnd.y - marqueeStart.y),
+                                    }}
+                                />
+                            )}
+                        </div>
                         {contextMenu.visible && (
                             <div
                                 className="z-50"
