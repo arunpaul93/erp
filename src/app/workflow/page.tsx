@@ -259,7 +259,7 @@ export default function WorkflowPage() {
     const didConnectRef = React.useRef<boolean>(false)
     const flowRef = React.useRef<ReactFlowInstance | null>(null)
     // Keep a stable reference to the latest showChildrenOf to avoid effect re-runs
-    const showChildrenRef = React.useRef<(id: string) => void>(() => {})
+    const showChildrenRef = React.useRef<(id: string) => void>(() => { })
     // Track which parent filter from URL has been applied to avoid loops
     const appliedParentRef = React.useRef<string | null>(null)
     // Keep last computed layout positions (from ELK) so we can snap nodes back after drag
@@ -868,7 +868,7 @@ export default function WorkflowPage() {
                 )
                 const visibleChildren = laidNodes.filter((n) => n.type === 'stepNode' && childIds.has(String(n.id)))
                 const innerEdges = laidEdges.filter((e) => childIds.has(String(e.source)) && childIds.has(String(e.target)))
-                
+
                 if (visibleChildren.length > 0 && innerEdges.length > 0) {
                     // Re-layout just the children subset using ELK
                     const { nodes: childrenLaidNodes } = await applyElkLayout(visibleChildren, innerEdges)
@@ -880,7 +880,7 @@ export default function WorkflowPage() {
                     const merged = new Map(layoutPosRef.current)
                     childrenPosMap.forEach((v, k) => merged.set(k, v))
                     layoutPosRef.current = merged
-                    
+
                     finalNodes = laidNodes.map((n) => ({
                         ...n,
                         hidden: !(n.type === 'stepNode' && childIds.has(String(n.id))),
@@ -907,7 +907,7 @@ export default function WorkflowPage() {
                 )
                 const visibleRoots = laidNodes.filter((n) => n.type === 'stepNode' && rootIds.has(String(n.id)))
                 const rootEdges = laidEdges.filter((e) => rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
-                
+
                 if (visibleRoots.length > 0 && rootEdges.length > 0) {
                     // Re-layout just the roots subset using ELK
                     const { nodes: rootsLaidNodes } = await applyElkLayout(visibleRoots, rootEdges)
@@ -919,7 +919,7 @@ export default function WorkflowPage() {
                     const merged = new Map(layoutPosRef.current)
                     rootsPosMap.forEach((v, k) => merged.set(k, v))
                     layoutPosRef.current = merged
-                    
+
                     finalNodes = laidNodes.map((n) => ({
                         ...n,
                         hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id))),
