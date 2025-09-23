@@ -107,6 +107,36 @@
 			"command": "npm run -s typecheck",
 			"isBackground": false,
 			"group": "build"
+		},
+		{
+			"label": "typecheck",
+			"type": "shell",
+			"command": "npm run -s typecheck",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "typecheck",
+			"type": "shell",
+			"command": "npm run -s typecheck",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "typecheck",
+			"type": "shell",
+			"command": "npm run -s typecheck",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
 		}
 	]
 }
