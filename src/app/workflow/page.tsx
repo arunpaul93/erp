@@ -258,6 +258,8 @@ export default function WorkflowPage() {
     // Track whether a successful connect happened to avoid creating a new node on end
     const didConnectRef = React.useRef<boolean>(false)
     const flowRef = React.useRef<ReactFlowInstance | null>(null)
+    // Keep a stable reference to the latest showChildrenOf to avoid effect re-runs
+    const showChildrenRef = React.useRef<(id: string) => void>(() => {})
     // Track which parent filter from URL has been applied to avoid loops
     const appliedParentRef = React.useRef<string | null>(null)
     // Keep last computed layout positions (from ELK) so we can snap nodes back after drag
@@ -375,50 +377,68 @@ export default function WorkflowPage() {
     // (removed custom marquee handlers; using selectionOnDrag on ReactFlow)
 
     // Show only direct children (nodes whose parent_step_id matches given id)
-    const showChildrenOf = useCallback((parentId: string) => {
-        setNodes((ns) => {
-            const childIds = new Set<string>(
-                ns
-                    .filter((n) => n.type === 'stepNode' && String((n.data as any)?.parentId || '') === String(parentId))
-                    .map((n) => String(n.id))
-            )
-            // Determine if a change is needed
-            let changed = false
-            for (const n of ns) {
-                const shouldBeVisible = n.type === 'stepNode' && childIds.has(String(n.id))
-                const shouldBeHidden = !shouldBeVisible
-                const currentlyHidden = !!(n as any).hidden
-                if (currentlyHidden !== shouldBeHidden) { changed = true; break }
-            }
-            if (!changed) return ns
+    const showChildrenOf = useCallback(async (parentId: string) => {
+        // Compute current graph from instance to avoid stale closures
+        const instance = flowRef.current
+        const curNodes: Node[] = instance?.getNodes ? (instance.getNodes() as any) : nodes
+        const curEdges: Edge[] = instance?.getEdges ? (instance.getEdges() as any) : edges
 
-            // Hide non-children nodes
-            const nextNodes = ns.map((n) => ({
-                ...n,
-                hidden: !(n.type === 'stepNode' && childIds.has(String(n.id)))
+        const childIds = new Set<string>(
+            curNodes.filter((n) => n.type === 'stepNode' && String((n.data as any)?.parentId || '') === String(parentId)).map((n) => String(n.id))
+        )
+
+        // Layout only the visible children with their internal edges
+        const visibleChildren = curNodes.filter((n) => n.type === 'stepNode' && childIds.has(String(n.id)))
+        const innerEdges = curEdges.filter((e) => childIds.has(String(e.source)) && childIds.has(String(e.target)))
+
+        if (visibleChildren.length) {
+            const elkLocal = new ELK({ defaultLayoutOptions: {} as any })
+            const elkGraph: any = {
+                id: `children-${parentId}`,
+                layoutOptions: {
+                    'elk.algorithm': 'layered',
+                    'elk.direction': 'RIGHT',
+                    'elk.spacing.nodeNodeBetweenLayers': String(colGap),
+                    'elk.layered.spacing.nodeNodeBetweenLayers': String(colGap),
+                    'elk.layered.spacing.edgeNodeBetweenLayers': String(Math.floor(colGap * 0.5)),
+                    'elk.layered.spacing.edgeEdgeBetweenLayers': String(Math.floor(colGap * 0.3)),
+                    'elk.spacing.nodeNode': String(rowGap),
+                    'elk.spacing.componentComponent': String(rowGap),
+                    'elk.layered.spacing.baseValue': String(colGap),
+                    'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
+                    'elk.layered.crossingMinimization.semiInteractive': 'true',
+                    'elk.interactiveLayout': 'true',
+                    'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
+                },
+                children: visibleChildren.map((n) => ({ id: n.id, width: ((n.style as any)?.width ?? 220), height: (n.style as any)?.height ?? 80 })),
+                edges: innerEdges.map((e) => ({ id: String(e.id), sources: [String(e.source)], targets: [String(e.target)] }))
+            }
+            const res = await elkLocal.layout(elkGraph)
+            const pos = new Map<string, { x: number; y: number }>()
+            for (const c of (res.children || [])) pos.set(String(c.id), { x: Math.round(c.x || 0), y: Math.round(c.y || 0) })
+            // Update snap-back positions for children
+            const merged = new Map(layoutPosRef.current)
+            pos.forEach((v, k) => merged.set(k, v))
+            layoutPosRef.current = merged
+
+            setNodes((ns) => ns.map((n) => {
+                const isChild = n.type === 'stepNode' && childIds.has(String(n.id))
+                if (!isChild) return { ...n, hidden: true } as any
+                const p = pos.get(String(n.id)) || { x: 0, y: 0 }
+                return { ...n, hidden: false, position: p }
             }))
-            // Hide edges not fully within the visible subset
-            setEdges((es) => {
-                let edgeChanged = false
-                const nextEdges = es.map((e) => {
-                    const shouldHide = !(childIds.has(String(e.source)) && childIds.has(String(e.target)))
-                    const currentlyHidden = !!(e as any).hidden
-                    if (currentlyHidden !== shouldHide) edgeChanged = true
-                    return { ...e, hidden: shouldHide }
-                })
-                return edgeChanged ? nextEdges : es
-            })
-            // Fit view to visible nodes
-            queueMicrotask(() => {
-                const instance = flowRef.current
-                if (instance) {
-                    const visible = (instance as any).getNodes ? (instance as any).getNodes().filter((n: any) => !n.hidden) : nextNodes.filter((n) => !(n as any).hidden)
-                    if (visible.length) instance.fitView({ nodes: visible as any, padding: 0.2, duration: 0 })
-                }
-            })
-            return nextNodes
-        })
-    }, [setNodes, setEdges])
+            setEdges((es) => es.map((e) => ({
+                ...e,
+                hidden: !(childIds.has(String(e.source)) && childIds.has(String(e.target)))
+            })))
+            queueMicrotask(() => instance?.fitView({ padding: 0.2, duration: 0 }))
+        } else {
+            // No children; just hide others
+            setNodes((ns) => ns.map((n) => ({ ...n, hidden: !(n.type === 'stepNode' && childIds.has(String(n.id))) })))
+            setEdges((es) => es.map((e) => ({ ...e, hidden: !(childIds.has(String(e.source)) && childIds.has(String(e.target))) })))
+            queueMicrotask(() => instance?.fitView({ padding: 0.2, duration: 0 }))
+        }
+    }, [nodes, edges, colGap, rowGap])
 
     // Show only root nodes (parent_step_id is null) by querying backend, hide others, arrange in grid, and fit view
     const showRootNodesOnly = useCallback(async () => {
@@ -431,22 +451,88 @@ export default function WorkflowPage() {
                 .is('parent_step_id', null)
             if (rootsErr) throw rootsErr
             const rootIds = new Set<string>((roots || []).map((r: any) => String(r.id)))
-            let updatedNodes: Node[] = (nodes.map((n) => ({
-                ...n,
-                hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
-            })) as unknown) as Node[]
-            // Apply grid layout to visible root nodes
-            updatedNodes = arrangeInGrid(updatedNodes, Math.max(colGap, 300))
-            setNodes(updatedNodes)
-            setEdges((es) => es.map((e) => ({
-                ...e,
-                hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
-            })))
+
+            // Determine root-only subgraph
+            const rootNodes = nodes.filter((n) => n.type === 'stepNode' && rootIds.has(String(n.id)))
+            const rootEdges = edges.filter((e) => rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
+            const hasRootEdges = rootEdges.length > 0 && rootNodes.length > 1
+
+            if (hasRootEdges) {
+                // Use ELK to pack only the visible roots based on their flows
+                const elkLocal = new ELK({ defaultLayoutOptions: {} as any })
+                const elkGraph: any = {
+                    id: 'root-only',
+                    layoutOptions: {
+                        'elk.algorithm': 'layered',
+                        'elk.direction': 'RIGHT',
+                        'elk.spacing.nodeNodeBetweenLayers': String(colGap),
+                        'elk.layered.spacing.nodeNodeBetweenLayers': String(colGap),
+                        'elk.layered.spacing.edgeNodeBetweenLayers': String(Math.floor(colGap * 0.5)),
+                        'elk.layered.spacing.edgeEdgeBetweenLayers': String(Math.floor(colGap * 0.3)),
+                        'elk.spacing.nodeNode': String(rowGap),
+                        'elk.spacing.componentComponent': String(rowGap),
+                        'elk.layered.spacing.baseValue': String(colGap),
+                        'elk.layered.nodePlacement.bk.fixedAlignment': 'BALANCED',
+                        'elk.layered.crossingMinimization.semiInteractive': 'true',
+                        'elk.interactiveLayout': 'true',
+                        'elk.layered.layering.strategy': 'NETWORK_SIMPLEX',
+                    },
+                    children: rootNodes.map((n) => ({
+                        id: n.id,
+                        width: ((n.style as any)?.width ?? 220),
+                        height: (n.style as any)?.height ?? 80,
+                    })),
+                    edges: rootEdges.map((e) => ({ id: String(e.id), sources: [String(e.source)], targets: [String(e.target)] }))
+                }
+                const res = await elkLocal.layout(elkGraph)
+                const pos = new Map<string, { x: number; y: number }>()
+                for (const c of (res.children || [])) {
+                    pos.set(String(c.id), { x: Math.round(c.x || 0), y: Math.round(c.y || 0) })
+                }
+                // Update snap-back store for roots
+                {
+                    const merged = new Map(layoutPosRef.current)
+                    pos.forEach((v, k) => merged.set(k, v))
+                    layoutPosRef.current = merged
+                }
+                const updatedNodes: Node[] = nodes.map((n) => {
+                    const isRoot = n.type === 'stepNode' && rootIds.has(String(n.id))
+                    if (!isRoot) return { ...n, hidden: true } as any
+                    const p = pos.get(String(n.id)) || { x: 0, y: 0 }
+                    return { ...n, hidden: false, position: p }
+                }) as any
+                setNodes(updatedNodes)
+                setEdges((es) => es.map((e) => ({
+                    ...e,
+                    hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
+                })))
+            } else {
+                // No flows among roots: keep compact grid
+                let updatedNodes: Node[] = (nodes.map((n) => ({
+                    ...n,
+                    hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
+                })) as unknown) as Node[]
+                updatedNodes = arrangeInGrid(updatedNodes, Math.max(colGap, 300))
+                // Update snap-back positions for visible roots to grid coordinates
+                {
+                    const merged = new Map(layoutPosRef.current)
+                    for (const n of updatedNodes) {
+                        const isRoot = n.type === 'stepNode' && rootIds.has(String(n.id)) && !(n as any).hidden
+                        if (isRoot) merged.set(String(n.id), { x: n.position.x, y: n.position.y })
+                    }
+                    layoutPosRef.current = merged
+                }
+                setNodes(updatedNodes)
+                setEdges((es) => es.map((e) => ({
+                    ...e,
+                    hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
+                })))
+            }
             queueMicrotask(() => flowRef.current?.fitView({ padding: 0.2, duration: 0 }))
         } catch (e: any) {
             setError(e.message || 'Failed to filter root nodes')
         }
-    }, [selectedOrgId, setNodes, setEdges, nodes, arrangeInGrid, colGap])
+    }, [selectedOrgId, setNodes, setEdges, nodes, edges, arrangeInGrid, colGap])
 
     // Simple fit helpers only
     const fitAll = useCallback(() => flowRef.current?.fitView({ padding: 0.15, duration: 0 }), [])
@@ -774,38 +860,90 @@ export default function WorkflowPage() {
             let finalEdges = laidEdges
 
             if (parentId) {
-                // Filter to children of specific parent
+                // Filter to children of specific parent and re-layout just the children
                 const childIds = new Set<string>(
                     laidNodes
                         .filter((n) => n.type === 'stepNode' && String((n.data as any)?.parentId || '') === String(parentId))
                         .map((n) => String(n.id))
                 )
-                finalNodes = laidNodes.map((n) => ({
-                    ...n,
-                    hidden: !(n.type === 'stepNode' && childIds.has(String(n.id))),
-                    selected: n.id === parentId
-                }))
+                const visibleChildren = laidNodes.filter((n) => n.type === 'stepNode' && childIds.has(String(n.id)))
+                const innerEdges = laidEdges.filter((e) => childIds.has(String(e.source)) && childIds.has(String(e.target)))
+                
+                if (visibleChildren.length > 0 && innerEdges.length > 0) {
+                    // Re-layout just the children subset using ELK
+                    const { nodes: childrenLaidNodes } = await applyElkLayout(visibleChildren, innerEdges)
+                    const childrenPosMap = new Map<string, { x: number; y: number }>()
+                    for (const n of childrenLaidNodes) {
+                        childrenPosMap.set(n.id, n.position)
+                    }
+                    // Update layoutPosRef for snap-back consistency
+                    const merged = new Map(layoutPosRef.current)
+                    childrenPosMap.forEach((v, k) => merged.set(k, v))
+                    layoutPosRef.current = merged
+                    
+                    finalNodes = laidNodes.map((n) => ({
+                        ...n,
+                        hidden: !(n.type === 'stepNode' && childIds.has(String(n.id))),
+                        selected: n.id === parentId,
+                        position: childrenPosMap.get(n.id) || n.position
+                    }))
+                } else {
+                    // No edges among children, use original positions but still filter
+                    finalNodes = laidNodes.map((n) => ({
+                        ...n,
+                        hidden: !(n.type === 'stepNode' && childIds.has(String(n.id))),
+                        selected: n.id === parentId
+                    }))
+                }
                 finalEdges = laidEdges.map((e) => ({
                     ...e,
                     hidden: !(childIds.has(String(e.source)) && childIds.has(String(e.target)))
                 }))
             } else {
-                // Filter to root nodes (null parent_step_id) by default and arrange in grid
+                // Filter to root nodes (null parent_step_id) by default
                 const rootIds = new Set<string>((steps || [])
                     .filter((s) => !s.parent_step_id)
                     .map((s) => String(s.id))
                 )
-                finalNodes = laidNodes.map((n) => ({
-                    ...n,
-                    hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
-                }))
+                const visibleRoots = laidNodes.filter((n) => n.type === 'stepNode' && rootIds.has(String(n.id)))
+                const rootEdges = laidEdges.filter((e) => rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
+                
+                if (visibleRoots.length > 0 && rootEdges.length > 0) {
+                    // Re-layout just the roots subset using ELK
+                    const { nodes: rootsLaidNodes } = await applyElkLayout(visibleRoots, rootEdges)
+                    const rootsPosMap = new Map<string, { x: number; y: number }>()
+                    for (const n of rootsLaidNodes) {
+                        rootsPosMap.set(n.id, n.position)
+                    }
+                    // Update layoutPosRef for snap-back consistency
+                    const merged = new Map(layoutPosRef.current)
+                    rootsPosMap.forEach((v, k) => merged.set(k, v))
+                    layoutPosRef.current = merged
+                    
+                    finalNodes = laidNodes.map((n) => ({
+                        ...n,
+                        hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id))),
+                        position: rootsPosMap.get(n.id) || n.position
+                    }))
+                } else {
+                    // No flows among roots: use grid layout
+                    finalNodes = laidNodes.map((n) => ({
+                        ...n,
+                        hidden: !(n.type === 'stepNode' && rootIds.has(String(n.id)))
+                    }))
+                    finalNodes = arrangeInGrid(finalNodes, Math.max(colGap, 300))
+                    // Update layoutPosRef for grid positions
+                    const merged = new Map(layoutPosRef.current)
+                    for (const n of finalNodes) {
+                        const isRoot = n.type === 'stepNode' && rootIds.has(String(n.id)) && !(n as any).hidden
+                        if (isRoot) merged.set(String(n.id), { x: n.position.x, y: n.position.y })
+                    }
+                    layoutPosRef.current = merged
+                }
                 finalEdges = laidEdges.map((e) => ({
                     ...e,
                     hidden: !(rootIds.has(String(e.source)) && rootIds.has(String(e.target)))
                 }))
-
-                // Apply grid layout to root nodes
-                finalNodes = arrangeInGrid(finalNodes, Math.max(colGap, 300))
             }
 
             setNodes(finalNodes)
@@ -976,6 +1114,9 @@ export default function WorkflowPage() {
         setDirtyEdits(prev => ({ ...prev, [nodeId]: { name, description } }))
     }, [setNodes])
 
+    // Keep ref in sync with latest showChildrenOf (no render churn)
+    useEffect(() => { showChildrenRef.current = (id: string) => { void (showChildrenOf as any)(id) } }, [showChildrenOf])
+
     // Reflect editing state and inject change handler into node data
     useEffect(() => {
         setNodes(ns => ns.map(n => {
@@ -993,12 +1134,12 @@ export default function WorkflowPage() {
                     onChange: (name: string, desc: string) => applyDraftToNode(n.id, name, desc),
                     onOpenChildren: (id: string) => {
                         setParentQuery(id)
-                        showChildrenOf(id)
+                        showChildrenRef.current(id)
                     }
                 }
             }
         }))
-    }, [editingNodeId, applyDraftToNode, setNodes, setParentQuery, showChildrenOf])
+    }, [editingNodeId, applyDraftToNode, setNodes, setParentQuery])
 
     // Keep hasChildren in sync when nodes change (based on parentId relationships)
     useEffect(() => {
