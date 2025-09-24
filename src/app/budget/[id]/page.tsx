@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useMemo } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { supabase } from "@/lib/supabase"
 import { useAuth } from "@/contexts/AuthContext"
@@ -47,6 +47,10 @@ export default function BudgetDetailPage() {
 
     const [incomes, setIncomes] = useState<IncomeRow[]>([])
     const [expenses, setExpenses] = useState<ExpenseRow[]>([])
+    // editing state for existing expenses
+    const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null)
+    const [editingForm, setEditingForm] = useState<any>(null) // shape similar to form + expense_type_id
+    const [savingEdit, setSavingEdit] = useState(false)
 
     // new income state
     const [incomeName, setIncomeName] = useState("")
@@ -261,8 +265,104 @@ export default function BudgetDetailPage() {
         }
     }
 
+    // Begin editing an expense
+    const startEditingExpense = (exp: any) => {
+        const rr = exp.recurrence_rule_id ? recurrenceRules.find(r => r.id === exp.recurrence_rule_id) : null
+        const cloned = exp.recurrence_details ? JSON.parse(JSON.stringify(exp.recurrence_details)) : {}
+        const withDefaults = buildDefaultRecurrenceDetails(exp.recurrence_rule_id, cloned)
+        setEditingExpenseId(exp.id)
+        setEditingForm({
+            id: exp.id,
+            expense_type_id: exp.expense_type_id || '',
+            name: exp.expense_name || '',
+            desc: exp.description || '',
+            code: exp.accounting_code || '',
+            selectedRuleType: rr?.rule_type || '',
+            recurrenceRuleId: exp.recurrence_rule_id || '',
+            recurrenceDetails: withDefaults,
+        })
+    }
+    const cancelEditing = () => { setEditingExpenseId(null); setEditingForm(null); setSavingEdit(false) }
+    const updateEditingField = (patch: any) => setEditingForm((prev: any) => ({ ...prev, ...patch }))
+    const updateEditingRecurrenceDetail = (field: string, val: any) => setEditingForm((prev: any) => ({ ...prev, recurrenceDetails: { ...(prev?.recurrenceDetails || {}), [field]: val } }))
+
+    const validateRecurrenceDetails = (ruleId: string, details: any): string[] => {
+        const rr = recurrenceRules.find(r => r.id === ruleId)
+        const requiredSpec = rr?.required_details || {}
+        const missing: string[] = []
+        if (requiredSpec && typeof requiredSpec === 'object') {
+            Object.entries(requiredSpec).forEach(([key, meta]: any) => { if (meta?.required && (details[key] === undefined || details[key] === '')) missing.push(key) })
+        }
+        if ('dates' in requiredSpec) {
+            const arr = details.dates
+            if (Array.isArray(arr)) arr.forEach((row: any, idx: number) => { if (!row?.date) missing.push(`dates[${idx}].date`); if (row?.amount === '' || row?.amount === undefined) missing.push(`dates[${idx}].amount`) })
+        }
+        if ('rates' in requiredSpec) {
+            const arr = details.rates
+            if (Array.isArray(arr)) arr.forEach((row: any, idx: number) => { if (row?.percent === '' || row?.percent === undefined) missing.push(`rates[${idx}].percent`); if (!row?.budget_income_id) missing.push(`rates[${idx}].budget_income_id`) })
+        }
+        if ('budget_income_ids' in requiredSpec) {
+            const ids = details.budget_income_ids
+            if (!Array.isArray(ids) || ids.length === 0) missing.push('budget_income_ids')
+        }
+        return missing
+    }
+
+    const saveEditedExpense = async () => {
+        if (!editingExpenseId || !editingForm) return
+        if (!editingForm.name.trim()) { setError('Name required'); return }
+        if (!selectedOrgId) { setError('No organisation selected'); return }
+        if (editingForm.recurrenceRuleId) {
+            const errs = validateRecurrenceDetails(editingForm.recurrenceRuleId, editingForm.recurrenceDetails)
+            if (errs.length) { setError(`Missing recurrence fields: ${errs.join(', ')}`); return }
+        }
+        setSavingEdit(true)
+        let normDetails = editingForm.recurrenceRuleId ? JSON.parse(JSON.stringify(editingForm.recurrenceDetails)) : null
+        if (normDetails) {
+            if (typeof normDetails.amount === 'string') normDetails.amount = parseFloat(normDetails.amount).toFixed(2)
+            if (typeof normDetails.percent === 'string') normDetails.percent = parseFloat(normDetails.percent).toFixed(2)
+            if (Array.isArray(normDetails.dates)) normDetails.dates = normDetails.dates.map((d: any) => ({ ...d, amount: d.amount !== '' ? parseFloat(d.amount).toFixed(2) : d.amount }))
+            if (Array.isArray(normDetails.rates)) normDetails.rates = normDetails.rates.map((r: any) => ({ ...r, percent: r.percent !== '' ? parseFloat(r.percent).toFixed(2) : r.percent }))
+        }
+        const updatePayload: any = {
+            expense_name: editingForm.name.trim(),
+            description: editingForm.desc || null,
+            accounting_code: editingForm.code || null,
+            recurrence_rule_id: editingForm.recurrenceRuleId || null,
+            recurrence_details: normDetails,
+        }
+        const { data, error } = await supabase.from('budget_expenses').update(updatePayload).eq('id', editingExpenseId).select('id, expense_name, description, accounting_code, expense_type_id, recurrence_rule_id, recurrence_details').maybeSingle()
+        setSavingEdit(false)
+        if (error) { setError(error.message); return }
+        if (data) {
+            setExpenses(prev => prev.map(e => e.id === editingExpenseId ? { id: String(data.id), expense_name: data.expense_name as string, description: (data as any).description ?? null, accounting_code: (data as any).accounting_code ?? null, expense_type_id: (data as any).expense_type_id ?? null, recurrence_rule_id: (data as any).recurrence_rule_id ?? null, recurrence_details: (data as any).recurrence_details ?? null } : e))
+            cancelEditing()
+        }
+    }
+
     // derive distinct rule types (global)
     const ruleTypes = Array.from(new Set(recurrenceRules.map(r => r.rule_type)))
+
+    // map for income id -> name (for preview display)
+    const incomeNameMap = useMemo(() => Object.fromEntries(incomes.map(i => [i.id, i.income_name])), [incomes])
+
+    // helper utilities for recurrence defaults
+    const isoDate = (d?: string | null) => {
+        if (!d) return ''
+        try { return new Date(d).toISOString().slice(0, 10) } catch { return '' }
+    }
+    const buildDefaultRecurrenceDetails = (ruleId: string | null | undefined, existing: any = {}) => {
+        if (!ruleId) return existing || {}
+        const rr = recurrenceRules.find(r => r.id === ruleId)
+        if (!rr) return existing || {}
+        const spec = rr.required_details || {}
+        const wantsStart = 'start_date' in spec
+        const wantsEnd = 'end_date' in spec || wantsStart
+        const next = { ...(existing || {}) }
+        if (wantsStart && !next.start_date && budget) next.start_date = isoDate(budget.period_start)
+        if (wantsEnd && !next.end_date && budget) next.end_date = isoDate(budget.period_end)
+        return next
+    }
 
     // Ensure form state exists for each expense type when they load
     useEffect(() => { ensureFormsForTypes(expenseTypes) }, [expenseTypes])
@@ -363,7 +463,8 @@ export default function BudgetDetailPage() {
                                                                         const list = recurrenceRules.filter(r => r.rule_type === sel)
                                                                         if (list.length === 1) autoRule = list[0].id
                                                                     }
-                                                                    updateExpenseForm(t.id, { selectedRuleType: sel, recurrenceRuleId: autoRule, recurrenceDetails: {} })
+                                                                    const defaults = buildDefaultRecurrenceDetails(autoRule, {})
+                                                                    updateExpenseForm(t.id, { selectedRuleType: sel, recurrenceRuleId: autoRule, recurrenceDetails: defaults })
                                                                 }} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 text-sm">
                                                                     <option value="">None</option>
                                                                     {ruleTypes.map(rt => <option key={rt} value={rt}>{rt}</option>)}
@@ -371,7 +472,7 @@ export default function BudgetDetailPage() {
                                                             </div>
                                                             <div>
                                                                 <label className="block text-xs text-gray-300 mb-1">Frequency</label>
-                                                                <select value={form.recurrenceRuleId} onChange={e => updateExpenseForm(t.id, { recurrenceRuleId: e.target.value, recurrenceDetails: {} })} disabled={!form.selectedRuleType} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 text-sm disabled:opacity-50">
+                                                                <select value={form.recurrenceRuleId} onChange={e => { const rid = e.target.value; const defaults = buildDefaultRecurrenceDetails(rid, {}); updateExpenseForm(t.id, { recurrenceRuleId: rid, recurrenceDetails: defaults }) }} disabled={!form.selectedRuleType} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded-md px-3 py-2 text-sm disabled:opacity-50">
                                                                     <option value="">{form.selectedRuleType ? 'Select frequency' : 'Choose type first'}</option>
                                                                     {frequenciesForType.map(r => <option key={r.id} value={r.id}>{r.frequency}</option>)}
                                                                 </select>
@@ -499,19 +600,181 @@ export default function BudgetDetailPage() {
                                                         <div className="text-gray-500 text-xs">No expenses for this type.</div>
                                                     ) : (
                                                         <ul className="space-y-2">
-                                                            {expensesForType.map(x => (
-                                                                <li key={x.id} className="p-2 rounded border border-gray-800 bg-gray-900/60">
-                                                                    <div className="text-gray-100 text-sm">{x.expense_name}</div>
-                                                                    {(x.accounting_code || x.description || x.recurrence_rule_id) && (
-                                                                        <div className="text-gray-400 text-[10px] mt-1">{[
-                                                                            x.accounting_code,
-                                                                            x.description,
-                                                                            x.recurrence_rule_id ? (() => { const rr = recurrenceRules.find(r => r.id === x.recurrence_rule_id); return rr ? `${rr.rule_type}:${rr.frequency}` : 'Recurring'; })() : null,
-                                                                            x.recurrence_rule_id && (x as any).recurrence_details ? (() => { try { const d = (x as any).recurrence_details; if (!d || typeof d !== 'object') return null; const priority = ['start_date', 'end_date']; const keys = Object.keys(d); const ordered = [...keys].sort((a, b) => { const pa = priority.indexOf(a); const pb = priority.indexOf(b); const ia = pa === -1 ? 999 : pa; const ib = pb === -1 ? 999 : pb; if (ia !== ib) return ia - ib; return a.localeCompare(b) }); return ordered.slice(0, 3).map(k => `${k}=${d[k]}`).join(', ') || null } catch { return null } })() : null
-                                                                        ].filter(Boolean).join(' · ')}</div>
-                                                                    )}
-                                                                </li>
-                                                            ))}
+                                                            {expensesForType.map(x => {
+                                                                const isEditing = editingExpenseId === x.id
+                                                                if (isEditing && editingForm) {
+                                                                    const rr = editingForm.recurrenceRuleId ? recurrenceRules.find(r => r.id === editingForm.recurrenceRuleId) : null
+                                                                    const specRaw = rr?.required_details || {}
+                                                                    const spec: any = { ...specRaw }
+                                                                    if ('start_date' in spec && !('end_date' in spec)) spec.end_date = { type: 'date', label: 'End Date', required: false }
+                                                                    let entries = Object.entries(spec)
+                                                                    const priority = ['start_date', 'end_date']
+                                                                    const pIndex = (k: string) => { const i = priority.indexOf(k); return i === -1 ? 999 : i }
+                                                                    entries = entries.sort((a: any, b: any) => { const pa = pIndex(a[0]); const pb = pIndex(b[0]); if (pa !== pb) return pa - pb; return a[0].localeCompare(b[0]) })
+                                                                    return (
+                                                                        <li key={x.id} className="p-2 rounded border border-yellow-600 bg-gray-900/70 space-y-2">
+                                                                            <input value={editingForm.name} onChange={e => updateEditingField({ name: e.target.value })} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-xs" />
+                                                                            <input value={editingForm.desc} onChange={e => updateEditingField({ desc: e.target.value })} placeholder="Description" className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-xs" />
+                                                                            <div className="grid grid-cols-2 gap-2">
+                                                                                <div>
+                                                                                    <label className="block text-[10px] text-gray-300 mb-0.5">Recurrence Type</label>
+                                                                                    <select value={editingForm.selectedRuleType} onChange={e => {
+                                                                                        const sel = e.target.value
+                                                                                        let autoRule = ''
+                                                                                        if (sel) { const list = recurrenceRules.filter(r => r.rule_type === sel); if (list.length === 1) autoRule = list[0].id }
+                                                                                        const defaults = buildDefaultRecurrenceDetails(autoRule, {})
+                                                                                        updateEditingField({ selectedRuleType: sel, recurrenceRuleId: autoRule, recurrenceDetails: defaults })
+                                                                                    }} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-xs">
+                                                                                        <option value="">None</option>
+                                                                                        {ruleTypes.map(rt => <option key={rt} value={rt}>{rt}</option>)}
+                                                                                    </select>
+                                                                                </div>
+                                                                                <div>
+                                                                                    <label className="block text-[10px] text-gray-300 mb-0.5">Frequency</label>
+                                                                                    <select value={editingForm.recurrenceRuleId} onChange={e => { const rid = e.target.value; const defaults = buildDefaultRecurrenceDetails(rid, {}); updateEditingField({ recurrenceRuleId: rid, recurrenceDetails: defaults }) }} disabled={!editingForm.selectedRuleType} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-xs disabled:opacity-50">
+                                                                                        <option value="">{editingForm.selectedRuleType ? 'Select frequency' : 'Choose type first'}</option>
+                                                                                        {recurrenceRules.filter(r => r.rule_type === editingForm.selectedRuleType).map(r => <option key={r.id} value={r.id}>{r.frequency}</option>)}
+                                                                                    </select>
+                                                                                </div>
+                                                                            </div>
+                                                                            {editingForm.selectedRuleType && <div className="text-[10px] text-gray-400">{editingForm.recurrenceRuleId ? <>Selected: {editingForm.selectedRuleType}:{recurrenceRules.find(r => r.id === editingForm.recurrenceRuleId)?.frequency}</> : <>Type: {editingForm.selectedRuleType} (choose frequency)</>}</div>}
+                                                                            {editingForm.recurrenceRuleId && !!entries.length && (
+                                                                                <div className="space-y-2 border border-gray-800 rounded p-2 bg-gray-900/40">
+                                                                                    <div className="text-[10px] uppercase tracking-wide text-gray-400">Recurrence Details</div>
+                                                                                    {entries.map(([field, meta]: any) => {
+                                                                                        const type = meta?.type || 'string'
+                                                                                        const label = meta?.label || field
+                                                                                        const required = !!meta?.required
+                                                                                        const placeholder = meta?.placeholder || ''
+                                                                                        const value = editingForm.recurrenceDetails[field] ?? ''
+                                                                                        const setField = (val: any) => updateEditingRecurrenceDetail(field, val)
+                                                                                        if (field === 'dates') {
+                                                                                            const arr = Array.isArray(value) ? value : []
+                                                                                            return (
+                                                                                                <div key={field} className="space-y-1">
+                                                                                                    <div className="flex items-center justify-between">
+                                                                                                        <label className="block text-[10px] text-gray-300">{label}{required && <span className="text-red-400">*</span>}</label>
+                                                                                                        <button type="button" onClick={() => setField([...arr, { date: '', amount: '' }])} className="text-[10px] text-yellow-400 hover:text-yellow-300">+ Add</button>
+                                                                                                    </div>
+                                                                                                    <div className="space-y-2">
+                                                                                                        {arr.length === 0 && <div className="text-[10px] text-gray-500">No dates.</div>}
+                                                                                                        {arr.map((row: any, idx: number) => (
+                                                                                                            <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+                                                                                                                <div className="col-span-5"><input type="date" value={row.date || ''} onChange={e => { const next = [...arr]; next[idx] = { ...next[idx], date: e.target.value }; setField(next) }} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-[10px]" /></div>
+                                                                                                                <div className="col-span-5"><input type="number" step="0.01" value={row.amount ?? ''} placeholder="Amount" onChange={e => { const next = [...arr]; next[idx] = { ...next[idx], amount: e.target.value }; setField(next) }} onBlur={e => { if (e.target.value !== '') { const next = [...arr]; next[idx] = { ...next[idx], amount: parseFloat(e.target.value).toFixed(2) }; setField(next) } }} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-[10px]" /></div>
+                                                                                                                <div className="col-span-2 flex justify-end"><button type="button" onClick={() => { const next = arr.filter((_: any, i: number) => i !== idx); setField(next) }} className="text-[10px] text-red-400 hover:text-red-300">Remove</button></div>
+                                                                                                            </div>
+                                                                                                        ))}
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            )
+                                                                                        }
+                                                                                        if (field === 'rates') {
+                                                                                            const arr = Array.isArray(value) ? value : []
+                                                                                            return (
+                                                                                                <div key={field} className="space-y-1">
+                                                                                                    <div className="flex items-center justify-between">
+                                                                                                        <label className="block text-[10px] text-gray-300">{label}{required && <span className="text-red-400">*</span>}</label>
+                                                                                                        <button type="button" onClick={() => setField([...arr, { percent: '', budget_income_id: '' }])} className="text-[10px] text-yellow-400 hover:text-yellow-300">+ Add</button>
+                                                                                                    </div>
+                                                                                                    <div className="space-y-2">
+                                                                                                        {arr.length === 0 && <div className="text-[10px] text-gray-500">No rates.</div>}
+                                                                                                        {arr.map((row: any, idx: number) => (
+                                                                                                            <div key={idx} className="grid grid-cols-12 gap-2 items-end">
+                                                                                                                <div className="col-span-4"><input type="number" step="0.01" value={row.percent ?? ''} placeholder="Percent" onChange={e => { const next = [...arr]; next[idx] = { ...next[idx], percent: e.target.value }; setField(next) }} onBlur={e => { if (e.target.value !== '') { const next = [...arr]; next[idx] = { ...next[idx], percent: parseFloat(e.target.value).toFixed(2) }; setField(next) } }} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-[10px]" /></div>
+                                                                                                                <div className="col-span-6"><select value={row.budget_income_id || ''} onChange={e => { const next = [...arr]; next[idx] = { ...next[idx], budget_income_id: e.target.value }; setField(next) }} className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-[10px]"><option value="">Select income</option>{incomes.map(i => <option key={i.id} value={i.id}>{i.income_name}</option>)}</select></div>
+                                                                                                                <div className="col-span-2 flex justify-end"><button type="button" onClick={() => { const next = arr.filter((_: any, i: number) => i !== idx); setField(next) }} className="text-[10px] text-red-400 hover:text-red-300">Remove</button></div>
+                                                                                                            </div>
+                                                                                                        ))}
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            )
+                                                                                        }
+                                                                                        if (field === 'budget_income_ids') {
+                                                                                            const selected: string[] = Array.isArray(value) ? value : []
+                                                                                            return (
+                                                                                                <div key={field} className="space-y-1">
+                                                                                                    <label className="block text-[10px] text-gray-300">{label || 'Linked Incomes'}{required && <span className="text-red-400">*</span>}</label>
+                                                                                                    <div className="space-y-1 max-h-32 overflow-auto pr-1 border border-gray-800 rounded p-2 bg-gray-900/30">
+                                                                                                        {incomes.length === 0 && <div className="text-[10px] text-gray-500">No incomes.</div>}
+                                                                                                        {incomes.map(i => {
+                                                                                                            const checked = selected.includes(i.id)
+                                                                                                            return (
+                                                                                                                <label key={i.id} className="flex items-center gap-1 text-[10px] text-gray-300 cursor-pointer">
+                                                                                                                    <input type="checkbox" className="accent-yellow-400" checked={checked} onChange={() => { let next = [...selected]; if (checked) next = next.filter(id => id !== i.id); else next.push(i.id); setField(next) }} />
+                                                                                                                    <span>{i.income_name}</span>
+                                                                                                                </label>
+                                                                                                            )
+                                                                                                        })}
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            )
+                                                                                        }
+                                                                                        const commonProps = { className: 'w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-[10px]', value, onChange: (e: any) => setField(e.target.value) }
+                                                                                        if (type === 'select' && Array.isArray(meta?.options)) return <div key={field} className="space-y-0.5"><label className="block text-[10px] text-gray-300">{label}{required && <span className="text-red-400">*</span>}</label><select {...commonProps}><option value="">{placeholder || 'Select...'}</option>{meta.options.map((opt: any) => <option key={opt.value || opt} value={opt.value || opt}>{opt.label || opt}</option>)}</select></div>
+                                                                                        if (type === 'number') return <div key={field} className="space-y-0.5"><label className="block text-[10px] text-gray-300">{label}{required && <span className="text-red-400">*</span>}</label><input type="number" step="0.01" placeholder={placeholder} {...commonProps} onBlur={e => { if (e.target.value !== '') setField(parseFloat(e.target.value).toFixed(2)) }} /></div>
+                                                                                        if (type === 'date' || field === 'start_date' || field === 'end_date') return <div key={field} className="space-y-0.5"><label className="block text-[10px] text-gray-300">{label}{required && <span className="text-red-400">*</span>}</label><input type="date" {...commonProps} /></div>
+                                                                                        return <div key={field} className="space-y-0.5"><label className="block text-[10px] text-gray-300">{label}{required && <span className="text-red-400">*</span>}</label><input type="text" placeholder={placeholder} {...commonProps} /></div>
+                                                                                    })}
+                                                                                </div>
+                                                                            )}
+                                                                            <input value={editingForm.code} onChange={e => updateEditingField({ code: e.target.value })} placeholder="Accounting code" className="w-full bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 text-[10px]" />
+                                                                            <div className="flex gap-2 justify-end pt-1">
+                                                                                <button onClick={cancelEditing} className="text-[10px] text-gray-400 hover:text-gray-300">Cancel</button>
+                                                                                <button onClick={saveEditedExpense} disabled={savingEdit} className="bg-yellow-400 hover:bg-yellow-500 disabled:opacity-50 text-gray-900 px-2 py-1 rounded text-[10px]">{savingEdit ? 'Saving…' : 'Save'}</button>
+                                                                            </div>
+                                                                        </li>
+                                                                    )
+                                                                }
+                                                                // Non-editing preview item
+                                                                return (
+                                                                    <li key={x.id} className="p-2 rounded border border-gray-800 bg-gray-900/60">
+                                                                        <div className="flex justify-between items-start gap-2">
+                                                                            <div>
+                                                                                <div className="text-gray-100 text-sm">{x.expense_name}</div>
+                                                                                {(x.accounting_code || x.description || x.recurrence_rule_id) && (
+                                                                                    <div className="text-gray-400 text-[10px] mt-1">{[
+                                                                                        x.accounting_code,
+                                                                                        x.description,
+                                                                                        x.recurrence_rule_id ? (() => { const rr = recurrenceRules.find(r => r.id === x.recurrence_rule_id); return rr ? `${rr.rule_type}:${rr.frequency}` : 'Recurring'; })() : null,
+                                                                                    ].filter(Boolean).join(' · ')}</div>
+                                                                                )}
+                                                                            </div>
+                                                                            <button onClick={() => startEditingExpense(x)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                        </div>
+                                                                        {x.recurrence_rule_id && (x as any).recurrence_details && (() => {
+                                                                            try {
+                                                                                const d = (x as any).recurrence_details
+                                                                                if (!d || typeof d !== 'object') return null
+                                                                                const entries = Object.entries(d)
+                                                                                if (!entries.length) return null
+                                                                                const renderVal = (k: string, v: any) => {
+                                                                                    if (k === 'budget_income_ids' && Array.isArray(v)) return v.map((id: string) => incomeNameMap[id] || id).join(', ')
+                                                                                    if (k === 'rates' && Array.isArray(v)) {
+                                                                                        return v.map((row: any) => {
+                                                                                            const nm = row.budget_income_id ? (incomeNameMap[row.budget_income_id] || row.budget_income_id) : ''
+                                                                                            const pct = row.percent !== undefined && row.percent !== '' ? `${row.percent}%` : ''
+                                                                                            return [pct, nm && `of ${nm}`].filter(Boolean).join(' ')
+                                                                                        }).join('; ')
+                                                                                    }
+                                                                                    if (k === 'dates' && Array.isArray(v)) {
+                                                                                        return v.map((row: any) => `${row.date || '?'}=${row.amount ?? ''}`).join('; ')
+                                                                                    }
+                                                                                    if (Array.isArray(v)) return JSON.stringify(v)
+                                                                                    return String(v)
+                                                                                }
+                                                                                return (
+                                                                                    <div className="mt-1 text-[10px] text-gray-400 space-y-0.5">
+                                                                                        {entries.map(([k, v]: any) => (
+                                                                                            <div key={k}><span className="text-gray-500">{k}:</span> {renderVal(k, v)}</div>
+                                                                                        ))}
+                                                                                    </div>
+                                                                                )
+                                                                            } catch { return null }
+                                                                        })()}
+                                                                    </li>
+                                                                )
+                                                            })}
                                                         </ul>
                                                     )}
                                                 </div>
