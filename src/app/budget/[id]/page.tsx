@@ -199,6 +199,7 @@ export default function BudgetDetailPage() {
     const createExpenseForType = async (typeId: string) => {
         const form = expenseForms[typeId]
         if (!form || !form.name.trim()) return
+        if (!selectedOrgId) { setError('No organisation selected'); return }
         // validation for recurrence
         if (form.recurrenceRuleId) {
             const rr = recurrenceRules.find(r => r.id === form.recurrenceRuleId)
@@ -243,6 +244,7 @@ export default function BudgetDetailPage() {
         }
         const insertPayload: any = {
             budget_id: budgetId,
+            organisation_id: selectedOrgId,
             expense_name: form.name.trim(),
             accounting_code: form.code || null,
             description: form.desc || null,
