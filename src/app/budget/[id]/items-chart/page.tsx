@@ -57,6 +57,7 @@ const zeroBaselinePlugin = {
 ChartJS.register(zeroBaselinePlugin as any)
 
 interface BudgetItemPoint { id: string; date: string; amount: number; type: 'income' | 'expense'; name: string }
+interface EquityTxn { id: string; date: string; amount: number; description?: string | null }
 
 export default function BudgetItemsChartPage() {
     const router = useRouter()
@@ -66,12 +67,20 @@ export default function BudgetItemsChartPage() {
     const { selectedOrgId, loading: orgLoading } = useOrg()
 
     const [items, setItems] = useState<BudgetItemPoint[]>([])
+    const [equityTxns, setEquityTxns] = useState<EquityTxn[]>([])
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const chartRef = useRef<any>(null)
     const [mode, setMode] = useState<'pan' | 'box-zoom'>('pan')
     const [gridOn, setGridOn] = useState(false)
     const [zoomReady, setZoomReady] = useState(false)
+    const [minEquity, setMinEquity] = useState<number>(0)
+    const [maxEquity, setMaxEquity] = useState<number>(50)
+    const [equityProcessing, setEquityProcessing] = useState(false)
+    const [reloadKey, setReloadKey] = useState(0)
+    const [showEquityConfig, setShowEquityConfig] = useState(false)
+    const [tempMin, setTempMin] = useState<number>(0)
+    const [tempMax, setTempMax] = useState<number>(50)
     // Lazy-load zoom plugin only in browser to avoid SSR window reference
     useEffect(() => {
         if (typeof window === 'undefined') return
@@ -122,13 +131,54 @@ export default function BudgetItemsChartPage() {
                 }))
                 setItems(mapped)
             }
+            // Load equity transactions separately
+            if (budgetId && selectedOrgId) {
+                const { data: eqData, error: eqErr } = await supabase
+                    .from('budget_equity_transactions')
+                    .select('id, transaction_date, amount, description')
+                    .eq('budget_id', budgetId)
+                    .eq('organisation_id', selectedOrgId)
+                    .order('transaction_date', { ascending: true })
+                if (eqErr) {
+                    console.error('Equity load error', eqErr.message)
+                } else {
+                    setEquityTxns((eqData ?? []).map((r: any) => ({
+                        id: String(r.id),
+                        date: r.transaction_date,
+                        amount: Number(r.amount),
+                        description: r.description
+                    })))
+                }
+            }
             setLoading(false)
         }
         load()
-    }, [budgetId, selectedOrgId])
+    }, [budgetId, selectedOrgId, reloadKey])
+
+    const runEnsureEquity = async () => {
+        if (!budgetId) return
+        setEquityProcessing(true)
+        try {
+            const { data, error: rpcError } = await supabase.rpc('ensure_budget_equity_buffer', {
+                p_budget_id: budgetId,
+                p_min_balance: minEquity,
+                p_max_balance: maxEquity,
+            })
+            if (rpcError) {
+                setError(rpcError.message)
+            } else {
+                // Trigger reload of equity + items (some items might depend indirectly)
+                setReloadKey(k => k + 1)
+            }
+        } catch (e: any) {
+            setError(e.message || 'Failed to calculate equity transactions')
+        } finally {
+            setEquityProcessing(false)
+        }
+    }
 
     const combinedData = useMemo(() => {
-        if (!items.length) return null
+        if (!items.length && !equityTxns.length) return null
         // Aggregate income & expense by date
         const incomeByDate: Record<string, number> = {}
         const expenseByDate: Record<string, number> = {}
@@ -139,7 +189,11 @@ export default function BudgetItemsChartPage() {
                 expenseByDate[it.date] = (expenseByDate[it.date] || 0) + it.amount
             }
         })
-        const labels = Array.from(new Set(items.map(i => i.date))).sort()
+        const equityByDate: Record<string, number> = {}
+        equityTxns.forEach(tx => {
+            equityByDate[tx.date] = (equityByDate[tx.date] || 0) + tx.amount
+        })
+        const labels = Array.from(new Set([...items.map(i => i.date), ...equityTxns.map(e => e.date)])).sort()
         // Compute arrays
         const incomes = labels.map(d => incomeByDate[d] || 0)
         const expenses = labels.map(d => expenseByDate[d] || 0)
@@ -149,6 +203,12 @@ export default function BudgetItemsChartPage() {
             const exp = expenses[idx]
             running += inc - exp
             return Number(running.toFixed(2))
+        })
+        // Cumulative equity balance over time (sum of equity transaction amounts)
+        let equityRunning = 0
+        const equityCumulative = labels.map(date => {
+            if (equityByDate[date]) equityRunning += equityByDate[date]
+            return Number(equityRunning.toFixed(2))
         })
         return {
             labels,
@@ -183,10 +243,21 @@ export default function BudgetItemsChartPage() {
                     fill: false,
                     borderWidth: 2,
                     order: 1,
+                },
+                {
+                    label: 'Equity Balance',
+                    data: equityCumulative,
+                    borderColor: '#fbbf24',
+                    backgroundColor: '#fbbf24',
+                    tension: 0.25,
+                    pointRadius: 2,
+                    fill: false,
+                    borderDash: [6, 3],
+                    order: 1,
                 }
             ]
         }
-    }, [items])
+    }, [items, equityTxns])
 
     if (authLoading || orgLoading) return null
     if (!user) return null
@@ -233,6 +304,38 @@ export default function BudgetItemsChartPage() {
                                         onClick={() => setGridOn(g => !g)}
                                         className={`text-xs rounded px-2 py-1 border transition-colors ${gridOn ? 'bg-green-600/20 border-green-500 text-green-300 hover:bg-green-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
                                     >{gridOn ? 'Grid (on)' : 'Grid (off)'}</button>
+                                    <div className="relative">
+                                        <button
+                                            onClick={() => {
+                                                if (!showEquityConfig) { setTempMin(minEquity); setTempMax(maxEquity) }
+                                                setShowEquityConfig(v => !v)
+                                            }}
+                                            className={`text-xs rounded px-2 py-1 border transition-colors ${showEquityConfig ? 'bg-yellow-600/30 border-yellow-500 text-yellow-300' : 'bg-yellow-600/20 border-yellow-500 text-yellow-300 hover:bg-yellow-600/30'}`}
+                                        >{equityProcessing ? 'Calculating…' : 'Calc Equity Txns'}</button>
+                                        {showEquityConfig && (
+                                            <div className="absolute z-10 right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-md p-3 shadow-xl flex flex-col gap-2">
+                                                <div className="flex flex-col gap-1">
+                                                    <label className="text-[10px] uppercase tracking-wide text-gray-400">Min Balance</label>
+                                                    <input type="number" value={tempMin} onChange={e => setTempMin(Number(e.target.value))} className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-yellow-500 text-gray-100 placeholder-gray-500" />
+                                                </div>
+                                                <div className="flex flex-col gap-1">
+                                                    <label className="text-[10px] uppercase tracking-wide text-gray-400">Max Balance</label>
+                                                    <input type="number" value={tempMax} onChange={e => setTempMax(Number(e.target.value))} className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-yellow-500 text-gray-100 placeholder-gray-500" />
+                                                </div>
+                                                <div className="flex justify-end gap-2 pt-1">
+                                                    <button onClick={() => setShowEquityConfig(false)} className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300">Cancel</button>
+                                                    <button
+                                                        disabled={equityProcessing}
+                                                        onClick={async () => {
+                                                            setMinEquity(tempMin); setMaxEquity(tempMax); setShowEquityConfig(false); await runEnsureEquity();
+                                                        }}
+                                                        className={`text-[10px] px-2 py-1 rounded border ${equityProcessing ? 'opacity-60 cursor-not-allowed bg-yellow-700/30 border-yellow-600 text-yellow-300' : 'bg-yellow-600/20 border-yellow-500 text-yellow-300 hover:bg-yellow-600/30'}`}
+                                                    >Run</button>
+                                                </div>
+                                                <p className="text-[10px] text-gray-500 leading-snug">Creates contributions/drawings so balance stays within range.</p>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                                 {(loading || error) && (
                                     <div className="text-xs text-gray-400">{loading ? 'Refreshing…' : error}</div>
