@@ -84,10 +84,8 @@ export default function StrategyCanvas({ value, onChange, fullScreen, selfName }
         // After values arrays resized, release suppression then force a re-run of onChange if something changed.
         setTimeout(() => {
             suppressOnChangeRef.current = false
-            if (anyChanged) {
-                // Nudge state (clone first entity values ref) to ensure dependency array changes if needed
-                setEntities(prev => [...prev])
-            }
+            // Always nudge so parent persists features even if arrays already matched (adding first feature when none existed)
+            setEntities(prev => [...prev])
         }, 0)
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [features.length])
