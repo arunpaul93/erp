@@ -16,9 +16,45 @@ import {
     CategoryScale,
 } from 'chart.js'
 import { Line } from 'react-chartjs-2'
-import zoomPlugin from 'chartjs-plugin-zoom'
 
-ChartJS.register(LineElement, PointElement, LinearScale, Tooltip, Legend, Filler, CategoryScale, zoomPlugin)
+ChartJS.register(LineElement, PointElement, LinearScale, Tooltip, Legend, Filler, CategoryScale)
+
+// Plugin to force zero line always visible on y-axis even after zoom/pan
+const alwaysZeroLinePlugin = {
+    id: 'alwaysZeroLine',
+    // Called during scale fit; adjust min/max to include 0
+    afterDataLimits(scale: any) {
+        if (scale.id === 'y') {
+            if (scale.min > 0) scale.min = 0
+            if (scale.max < 0) scale.max = 0
+        }
+    }
+}
+ChartJS.register(alwaysZeroLinePlugin as any)
+
+// Draw a visible baseline at y=0 regardless of grid toggle
+const zeroBaselinePlugin = {
+    id: 'zeroBaseline',
+    afterDraw: (chart: any) => {
+        const yScale = chart.scales?.y
+        if (!yScale) return
+        const y = yScale.getPixelForValue(0)
+        if (!isFinite(y)) return
+        const { left, right, top, bottom } = chart.chartArea
+        if (y < top - 5 || y > bottom + 5) return // outside view
+        const ctx = chart.ctx
+        ctx.save()
+        ctx.lineWidth = 1.5
+        ctx.strokeStyle = '#475569' // slate-600 like
+        ctx.setLineDash([5, 3])
+        ctx.beginPath()
+        ctx.moveTo(left, y)
+        ctx.lineTo(right, y)
+        ctx.stroke()
+        ctx.restore()
+    }
+}
+ChartJS.register(zeroBaselinePlugin as any)
 
 interface BudgetItemPoint { id: string; date: string; amount: number; type: 'income' | 'expense'; name: string }
 
@@ -33,6 +69,30 @@ export default function BudgetItemsChartPage() {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const chartRef = useRef<any>(null)
+    const [mode, setMode] = useState<'pan' | 'box-zoom'>('pan')
+    const [gridOn, setGridOn] = useState(false)
+    const [zoomReady, setZoomReady] = useState(false)
+    // Lazy-load zoom plugin only in browser to avoid SSR window reference
+    useEffect(() => {
+        if (typeof window === 'undefined') return
+        let active = true
+            ; (async () => {
+                try {
+                    const mod = await import('chartjs-plugin-zoom')
+                    if (!active) return
+                    // Register only once
+                    // @ts-ignore
+                    if (!(ChartJS as any)._zoomRegistered) {
+                        ChartJS.register(mod.default)
+                            ; (ChartJS as any)._zoomRegistered = true
+                    }
+                    setZoomReady(true)
+                } catch (e) {
+                    console.error('Failed to load zoom plugin', e)
+                }
+            })()
+        return () => { active = false }
+    }, [])
 
     useEffect(() => { if (!authLoading && !user) router.push('/login') }, [authLoading, user, router])
 
@@ -161,6 +221,18 @@ export default function BudgetItemsChartPage() {
                                         }}
                                         className="text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 px-2 py-1 border border-gray-700"
                                     >Fit to View</button>
+                                    <button
+                                        onClick={() => setMode(m => m === 'pan' ? 'box-zoom' : 'pan')}
+                                        className={`text-xs rounded px-2 py-1 border transition-colors ${mode === 'pan' ? 'bg-blue-600/20 border-blue-500 text-blue-300 hover:bg-blue-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
+                                    >{mode === 'pan' ? 'Pan (active)' : 'Pan'}</button>
+                                    <button
+                                        onClick={() => setMode(m => m === 'box-zoom' ? 'pan' : 'box-zoom')}
+                                        className={`text-xs rounded px-2 py-1 border transition-colors ${mode === 'box-zoom' ? 'bg-purple-600/20 border-purple-500 text-purple-300 hover:bg-purple-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
+                                    >{mode === 'box-zoom' ? 'Box Zoom (active)' : 'Box Zoom'}</button>
+                                    <button
+                                        onClick={() => setGridOn(g => !g)}
+                                        className={`text-xs rounded px-2 py-1 border transition-colors ${gridOn ? 'bg-green-600/20 border-green-500 text-green-300 hover:bg-green-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
+                                    >{gridOn ? 'Grid (on)' : 'Grid (off)'}</button>
                                 </div>
                                 {(loading || error) && (
                                     <div className="text-xs text-gray-400">{loading ? 'Refreshing…' : error}</div>
@@ -188,19 +260,21 @@ export default function BudgetItemsChartPage() {
                                                     }
                                                 }
                                             },
-                                            zoom: {
-                                                limits: {
-                                                    x: { minRange: 1 },
-                                                    y: { minRange: 1 }
-                                                },
-                                                pan: { enabled: true, mode: 'xy' },
+                                            ...(zoomReady ? {
                                                 zoom: {
-                                                    wheel: { enabled: true },
-                                                    pinch: { enabled: true },
-                                                    drag: { enabled: true },
-                                                    mode: 'x'
+                                                    limits: {
+                                                        x: { minRange: 1 },
+                                                        y: { minRange: 1 }
+                                                    },
+                                                    pan: { enabled: mode === 'pan', mode: 'xy' },
+                                                    zoom: {
+                                                        wheel: { enabled: true },
+                                                        pinch: { enabled: true },
+                                                        drag: { enabled: mode === 'box-zoom' },
+                                                        mode: mode === 'box-zoom' ? 'xy' : 'xy'
+                                                    }
                                                 }
-                                            }
+                                            } : {})
                                         },
                                         interaction: { mode: 'nearest', intersect: false },
                                         scales: {
@@ -208,16 +282,23 @@ export default function BudgetItemsChartPage() {
                                                 ticks: {
                                                     color: '#9ca3af',
                                                     callback: (v, idx, ticks) => {
-                                                        // v is the label value (string date) when categorical
                                                         const value = (typeof v === 'string') ? v : (combinedData?.labels?.[Number(v)] as string)
                                                         const d = new Date(value)
                                                         if (isNaN(d.getTime())) return value
                                                         return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
                                                     }
                                                 },
-                                                grid: { color: '#1f2937' }
+                                                grid: { color: '#1f2937', display: gridOn }
                                             },
-                                            y: { ticks: { color: '#9ca3af' }, beginAtZero: true, grid: { color: '#1f2937' } }
+                                            y: {
+                                                ticks: { color: '#9ca3af' },
+                                                beginAtZero: true,
+                                                grid: {
+                                                    color: '#1f2937',
+                                                    display: gridOn,
+                                                    lineWidth: (ctx: any) => (ctx.tick && ctx.tick.value === 0 ? 2 : 1),
+                                                }
+                                            }
                                         }
                                     }}
                                 />
