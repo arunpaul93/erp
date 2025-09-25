@@ -81,10 +81,10 @@ export default function BusinessPlanDetailPage() {
         setIdentifiedOperationalChallenges(data?.identified_operational_challenges ?? '')
         setRisksAndPlanB(data?.risks_and_plan_b ?? '')
         setVision35Years(data?.vision_3_5_years ?? '')
-  const loadedCanvas = (data as any)?.canvas ?? null
-  setCanvas(loadedCanvas)
-  // Mark as loaded so subsequent user edits trigger autosave
-  canvasLoadedRef.current = true
+        const loadedCanvas = (data as any)?.canvas ?? null
+        setCanvas(loadedCanvas)
+        // Mark as loaded so subsequent user edits trigger autosave
+        canvasLoadedRef.current = true
 
         setPrioritiesNext90Days(data?.priorities_next_90_days ?? '')
       }

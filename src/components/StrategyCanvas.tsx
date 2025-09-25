@@ -35,7 +35,7 @@ export type CanvasData = {
 }
 
 export default function StrategyCanvas({ value, onChange, fullScreen, selfName }: { value?: CanvasData | null, onChange?: (data: CanvasData) => void, fullScreen?: boolean, selfName?: string }) {
-    const [features, setFeatures] = useState<string[]>(['Price', 'Location'])
+    const [features, setFeatures] = useState<string[]>(['Price', 'Location', 'Returning Customers'])
     const [minY, setMinY] = useState<number>(0)
     const [maxY, setMaxY] = useState<number>(10)
     const [yStep, setYStep] = useState<number | null>(null)
@@ -370,12 +370,15 @@ export default function StrategyCanvas({ value, onChange, fullScreen, selfName }
                     ))}
 
                     {/* X categories */}
-                    {features.map((f, i) => (
-                        <g key={i}>
-                            <line x1={xForIndex(i)} x2={xForIndex(i)} y1={chart.y} y2={chart.y + chart.h} stroke="#111827" />
-                            <text x={xForIndex(i)} y={chart.y + chart.h + 16} fill="#e5e7eb" fontSize={13} textAnchor="middle">{f}</text>
-                        </g>
-                    ))}
+                    {features.map((f, i) => {
+                        const anchor = i === 0 ? 'start' : (i === features.length - 1 ? 'end' : 'middle')
+                        return (
+                            <g key={i}>
+                                <line x1={xForIndex(i)} x2={xForIndex(i)} y1={chart.y} y2={chart.y + chart.h} stroke="#111827" />
+                                <text x={xForIndex(i)} y={chart.y + chart.h + 16} fill="#e5e7eb" fontSize={13} textAnchor={anchor}>{f}</text>
+                            </g>
+                        )
+                    })}
 
                     {/* Lines and points per entity (visible only) */}
                     {entities.filter(e => e.visible !== false).map((e, ei) => {
