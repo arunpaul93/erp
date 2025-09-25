@@ -60,6 +60,9 @@ export default function BudgetDetailPage() {
     const [editingIncomeId, setEditingIncomeId] = useState<string | null>(null)
     const [editingIncomeForm, setEditingIncomeForm] = useState<any>(null)
     const [savingIncomeEdit, setSavingIncomeEdit] = useState(false)
+    const [deletingIncomeId, setDeletingIncomeId] = useState<string | null>(null)
+    const [deletingExpenseId, setDeletingExpenseId] = useState<string | null>(null)
+    const [pendingDelete, setPendingDelete] = useState<{ type: 'income' | 'expense'; id: string } | null>(null)
 
     // per-income-type form state
     interface IncomeFormState { name: string; code: string; desc: string; saving: boolean; selectedRuleType: string; recurrenceRuleId: string; recurrenceDetails: Record<string, any> }
@@ -198,6 +201,7 @@ export default function BudgetDetailPage() {
     const createIncomeForType = async (typeId: string) => {
         const form = incomeForms[typeId]
         if (!form || !form.name.trim()) return
+        if (!selectedOrgId) { setError('No organisation selected'); return }
         // Only allow 'fixed' rule type; frequency selection will be restricted to those rules
         let recurrenceRuleId = form.recurrenceRuleId
         if (form.selectedRuleType !== 'fixed') recurrenceRuleId = ''
@@ -233,6 +237,7 @@ export default function BudgetDetailPage() {
         }
         const { data, error } = await supabase.from('budget_incomes').insert({
             budget_id: budgetId,
+            organisation_id: selectedOrgId,
             income_name: form.name.trim(),
             accounting_code: form.code || null,
             description: form.desc || null,
@@ -316,6 +321,24 @@ export default function BudgetDetailPage() {
             setIncomes(prev => prev.map(i => i.id === editingIncomeId ? { id: String(data.id), income_name: data.income_name as string, description: (data as any).description ?? null, accounting_code: (data as any).accounting_code ?? null, income_type_id: (data as any).income_type_id ?? null, recurrence_rule_id: (data as any).recurrence_rule_id ?? null, recurrence_details: (data as any).recurrence_details ?? null } : i))
             cancelEditingIncome()
         }
+    }
+
+    const deleteIncome = async (id: string) => {
+        if (!id) return
+        setDeletingIncomeId(id)
+        const { error } = await supabase.from('budget_incomes').delete().eq('id', id)
+        setDeletingIncomeId(null)
+        if (error) { setError(error.message); return }
+        setIncomes(prev => prev.filter(i => i.id !== id))
+        if (editingIncomeId === id) cancelEditingIncome()
+    }
+
+    const confirmDelete = async () => {
+        if (!pendingDelete) return
+        const { type, id } = pendingDelete
+        if (type === 'income') await deleteIncome(id)
+        else await deleteExpense(id)
+        setPendingDelete(null)
     }
 
     const createExpenseForType = async (typeId: string) => {
@@ -456,6 +479,16 @@ export default function BudgetDetailPage() {
             setExpenses(prev => prev.map(e => e.id === editingExpenseId ? { id: String(data.id), expense_name: data.expense_name as string, description: (data as any).description ?? null, accounting_code: (data as any).accounting_code ?? null, expense_type_id: (data as any).expense_type_id ?? null, recurrence_rule_id: (data as any).recurrence_rule_id ?? null, recurrence_details: (data as any).recurrence_details ?? null } : e))
             cancelEditing()
         }
+    }
+
+    const deleteExpense = async (id: string) => {
+        if (!id) return
+        setDeletingExpenseId(id)
+        const { error } = await supabase.from('budget_expenses').delete().eq('id', id)
+        setDeletingExpenseId(null)
+        if (error) { setError(error.message); return }
+        setExpenses(prev => prev.filter(e => e.id !== id))
+        if (editingExpenseId === id) cancelEditing()
     }
 
     // derive distinct rule types (global)
@@ -848,7 +881,10 @@ export default function BudgetDetailPage() {
                                                                                 <div className="text-gray-100 text-sm">{i.income_name}</div>
                                                                                 {(i.accounting_code || i.description || recurSummary) && <div className="text-gray-400 text-[10px] mt-1">{[i.accounting_code, i.description, recurSummary].filter(Boolean).join(' · ')}</div>}
                                                                             </div>
-                                                                            <button onClick={() => startEditingIncome(i)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                            <div className="flex items-center gap-2">
+                                                                                <button onClick={() => startEditingIncome(i)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                                <button onClick={() => setPendingDelete({ type: 'income', id: i.id })} disabled={deletingIncomeId === i.id} className="text-[10px] text-red-400 hover:text-red-300 disabled:opacity-50">{deletingIncomeId === i.id ? 'Deleting…' : 'Delete'}</button>
+                                                                            </div>
                                                                         </div>
                                                                         {i.recurrence_rule_id && i.recurrence_details && (() => {
                                                                             try {
@@ -877,8 +913,16 @@ export default function BudgetDetailPage() {
                                                 <ul className="space-y-2">
                                                     {incomes.filter(i => !i.income_type_id).map(i => (
                                                         <li key={i.id} className="p-2 rounded border border-gray-800 bg-gray-900/60">
-                                                            <div className="text-gray-100 text-sm">{i.income_name}</div>
-                                                            {(i.accounting_code || i.description) && <div className="text-gray-400 text-[10px] mt-1">{[i.accounting_code, i.description].filter(Boolean).join(' · ')}</div>}
+                                                            <div className="flex justify-between items-start gap-2">
+                                                                <div>
+                                                                    <div className="text-gray-100 text-sm">{i.income_name}</div>
+                                                                    {(i.accounting_code || i.description) && <div className="text-gray-400 text-[10px] mt-1">{[i.accounting_code, i.description].filter(Boolean).join(' · ')}</div>}
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <button onClick={() => startEditingIncome(i)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                    <button onClick={() => setPendingDelete({ type: 'income', id: i.id })} disabled={deletingIncomeId === i.id} className="text-[10px] text-red-400 hover:text-red-300 disabled:opacity-50">{deletingIncomeId === i.id ? 'Deleting…' : 'Delete'}</button>
+                                                                </div>
+                                                            </div>
                                                         </li>
                                                     ))}
                                                 </ul>
@@ -1202,7 +1246,10 @@ export default function BudgetDetailPage() {
                                                                                     ].filter(Boolean).join(' · ')}</div>
                                                                                 )}
                                                                             </div>
-                                                                            <button onClick={() => startEditingExpense(x)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                            <div className="flex items-center gap-2">
+                                                                                <button onClick={() => startEditingExpense(x)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                                <button onClick={() => setPendingDelete({ type: 'expense', id: x.id })} disabled={deletingExpenseId === x.id} className="text-[10px] text-red-400 hover:text-red-300 disabled:opacity-50">{deletingExpenseId === x.id ? 'Deleting…' : 'Delete'}</button>
+                                                                            </div>
                                                                         </div>
                                                                         {x.recurrence_rule_id && (x as any).recurrence_details && (() => {
                                                                             try {
@@ -1249,15 +1296,23 @@ export default function BudgetDetailPage() {
                                                 <ul className="space-y-2">
                                                     {expenses.filter(e => !e.expense_type_id).map(x => (
                                                         <li key={x.id} className="p-2 rounded border border-gray-800 bg-gray-900/60">
-                                                            <div className="text-gray-100 text-sm">{x.expense_name}</div>
-                                                            {(x.accounting_code || x.description || x.recurrence_rule_id) && (
-                                                                <div className="text-gray-400 text-[10px] mt-1">{[
-                                                                    x.accounting_code,
-                                                                    x.description,
-                                                                    x.recurrence_rule_id ? (() => { const rr = recurrenceRules.find(r => r.id === x.recurrence_rule_id); return rr ? `${rr.rule_type}:${rr.frequency}` : 'Recurring'; })() : null,
-                                                                    x.recurrence_rule_id && (x as any).recurrence_details ? (() => { try { const d = (x as any).recurrence_details; if (!d || typeof d !== 'object') return null; const priority = ['start_date', 'end_date']; const keys = Object.keys(d); const ordered = [...keys].sort((a, b) => { const pa = priority.indexOf(a); const pb = priority.indexOf(b); const ia = pa === -1 ? 999 : pa; const ib = pb === -1 ? 999 : pb; if (ia !== ib) return ia - ib; return a.localeCompare(b) }); return ordered.slice(0, 3).map(k => `${k}=${d[k]}`).join(', ') || null } catch { return null } })() : null
-                                                                ].filter(Boolean).join(' · ')}</div>
-                                                            )}
+                                                            <div className="flex justify-between items-start gap-2">
+                                                                <div>
+                                                                    <div className="text-gray-100 text-sm">{x.expense_name}</div>
+                                                                    {(x.accounting_code || x.description || x.recurrence_rule_id) && (
+                                                                        <div className="text-gray-400 text-[10px] mt-1">{[
+                                                                            x.accounting_code,
+                                                                            x.description,
+                                                                            x.recurrence_rule_id ? (() => { const rr = recurrenceRules.find(r => r.id === x.recurrence_rule_id); return rr ? `${rr.rule_type}:${rr.frequency}` : 'Recurring'; })() : null,
+                                                                            x.recurrence_rule_id && (x as any).recurrence_details ? (() => { try { const d = (x as any).recurrence_details; if (!d || typeof d !== 'object') return null; const priority = ['start_date', 'end_date']; const keys = Object.keys(d); const ordered = [...keys].sort((a, b) => { const pa = priority.indexOf(a); const pb = priority.indexOf(b); const ia = pa === -1 ? 999 : pa; const ib = pb === -1 ? 999 : pb; if (ia !== ib) return ia - ib; return a.localeCompare(b) }); return ordered.slice(0, 3).map(k => `${k}=${d[k]}`).join(', ') || null } catch { return null } })() : null
+                                                                        ].filter(Boolean).join(' · ')}</div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="flex items-center gap-2">
+                                                                    <button onClick={() => startEditingExpense(x)} className="text-[10px] text-yellow-400 hover:text-yellow-300">Edit</button>
+                                                                    <button onClick={() => setPendingDelete({ type: 'expense', id: x.id })} disabled={deletingExpenseId === x.id} className="text-[10px] text-red-400 hover:text-red-300 disabled:opacity-50">{deletingExpenseId === x.id ? 'Deleting…' : 'Delete'}</button>
+                                                                </div>
+                                                            </div>
                                                         </li>
                                                     ))}
                                                 </ul>
@@ -1270,6 +1325,19 @@ export default function BudgetDetailPage() {
                     )}
                 </div>
             </main>
+
+            {pendingDelete && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+                    <div className="w-full max-w-sm rounded-lg border border-gray-800 bg-gray-900 p-4 shadow-xl">
+                        <div className="text-gray-100 font-semibold mb-1">Confirm deletion</div>
+                        <div className="text-gray-400 text-sm mb-3">Are you sure you want to delete this {pendingDelete.type}? This action cannot be undone.</div>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={() => setPendingDelete(null)} className="text-sm text-gray-300 hover:text-gray-200">Cancel</button>
+                            <button onClick={confirmDelete} className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1.5 rounded">Delete</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
