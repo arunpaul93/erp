@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/contexts/AuthContext'
@@ -38,6 +38,11 @@ export default function BusinessPlanDetailPage() {
   const [prioritiesNext90Days, setPrioritiesNext90Days] = useState('')
   // budget items are managed on the budget detail page
   const [canvas, setCanvas] = useState<CanvasData | null>(null)
+  // Track canvas autosave status
+  const [canvasAutoSaving, setCanvasAutoSaving] = useState(false)
+  const [canvasAutoSaveError, setCanvasAutoSaveError] = useState<string | null>(null)
+  const canvasLoadedRef = useRef(false)
+  const canvasSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const orgName = useMemo(() => orgs.find(o => o.id === selectedOrgId)?.name ?? '—', [orgs, selectedOrgId])
 
@@ -76,7 +81,10 @@ export default function BusinessPlanDetailPage() {
         setIdentifiedOperationalChallenges(data?.identified_operational_challenges ?? '')
         setRisksAndPlanB(data?.risks_and_plan_b ?? '')
         setVision35Years(data?.vision_3_5_years ?? '')
-        setCanvas((data as any)?.canvas ?? null)
+  const loadedCanvas = (data as any)?.canvas ?? null
+  setCanvas(loadedCanvas)
+  // Mark as loaded so subsequent user edits trigger autosave
+  canvasLoadedRef.current = true
 
         setPrioritiesNext90Days(data?.priorities_next_90_days ?? '')
       }
@@ -124,6 +132,34 @@ export default function BusinessPlanDetailPage() {
     // Close modal / navigate back to list after save
     router.push('/business-plan')
   }
+
+  // Debounced autosave for canvas (features) changes so user doesn't lose updates if they forget to click Save.
+  useEffect(() => {
+    if (!id || !selectedOrgId) return
+    if (!canvasLoadedRef.current) return // don't save initial load
+    if (!canvas) return
+
+    // Clear any pending save
+    if (canvasSaveTimeoutRef.current) clearTimeout(canvasSaveTimeoutRef.current)
+
+    canvasSaveTimeoutRef.current = setTimeout(async () => {
+      setCanvasAutoSaving(true)
+      setCanvasAutoSaveError(null)
+      const { error } = await supabase
+        .from('business_plan')
+        .update({ canvas, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('organisation_id', selectedOrgId)
+      if (error) {
+        setCanvasAutoSaveError(error.message)
+      }
+      setCanvasAutoSaving(false)
+    }, 900) // 0.9s debounce
+
+    return () => {
+      if (canvasSaveTimeoutRef.current) clearTimeout(canvasSaveTimeoutRef.current)
+    }
+  }, [canvas, id, selectedOrgId])
 
   if (authLoading || orgLoading) return null
   if (!user) return null
@@ -199,6 +235,11 @@ export default function BusinessPlanDetailPage() {
                   <label className="block text-sm text-gray-300 mb-2">Strategy Canvas</label>
                   <div className="-mx-4">
                     <StrategyCanvas value={canvas} onChange={setCanvas} fullScreen selfName={orgName} />
+                  </div>
+                  <div className="mt-1 min-h-[18px]">
+                    {canvasAutoSaving && <span className="text-xs text-blue-400">Autosaving canvas…</span>}
+                    {!canvasAutoSaving && canvasAutoSaveError && <span className="text-xs text-red-400">Canvas save failed: {canvasAutoSaveError}</span>}
+                    {!canvasAutoSaving && !canvasAutoSaveError && canvasLoadedRef.current && <span className="text-xs text-gray-500">Canvas changes saved.</span>}
                   </div>
                 </div>
 
