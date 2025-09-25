@@ -80,6 +80,10 @@ export default function BudgetDetailPage() {
             else setIncomes((inc ?? []).map((r: any) => ({ id: String(r.id), income_name: r.income_name, description: r.description ?? null, accounting_code: r.accounting_code ?? null, income_type_id: r.income_type_id ?? null, recurrence_rule_id: r.recurrence_rule_id ?? null, recurrence_details: r.recurrence_details ?? null })))
             if (ee) setError(ee.message)
             else setExpenses((exp ?? []).map((r: any) => ({ id: String(r.id), expense_name: r.expense_name, description: r.description ?? null, accounting_code: r.accounting_code ?? null, expense_type_id: r.expense_type_id ?? null, recurrence_rule_id: r.recurrence_rule_id ?? null, recurrence_details: r.recurrence_details ?? null })))
+            // After refresh, navigate to chart view for visualisation
+            setTimeout(() => {
+                try { (window as any).location.href = `/budget/${budgetId}/items-chart` } catch { /* noop */ }
+            }, 300)
         } catch (e: any) {
             setError(e?.message || 'Failed to generate budget items')
         } finally {
