@@ -63,6 +63,29 @@ export default function BudgetDetailPage() {
     const [deletingIncomeId, setDeletingIncomeId] = useState<string | null>(null)
     const [deletingExpenseId, setDeletingExpenseId] = useState<string | null>(null)
     const [pendingDelete, setPendingDelete] = useState<{ type: 'income' | 'expense'; id: string } | null>(null)
+    const [generating, setGenerating] = useState(false)
+
+    const runGenerateBudgetItems = async () => {
+        if (!budgetId) return
+        setError(null)
+        setGenerating(true)
+        try {
+            const { error: genError } = await supabase.rpc('generate_budget_items', { p_budget_id: budgetId, p_replace_existing: true }) as any
+            if (genError) throw genError
+            const [{ data: inc, error: ie }, { data: exp, error: ee }] = await Promise.all([
+                supabase.from('budget_incomes').select('id, income_name, description, accounting_code, income_type_id, recurrence_rule_id, recurrence_details').eq('budget_id', budgetId).order('created_at', { ascending: false }),
+                supabase.from('budget_expenses').select('id, expense_name, description, accounting_code, expense_type_id, recurrence_rule_id, recurrence_details').eq('budget_id', budgetId).order('created_at', { ascending: false }),
+            ])
+            if (ie) setError(ie.message)
+            else setIncomes((inc ?? []).map((r: any) => ({ id: String(r.id), income_name: r.income_name, description: r.description ?? null, accounting_code: r.accounting_code ?? null, income_type_id: r.income_type_id ?? null, recurrence_rule_id: r.recurrence_rule_id ?? null, recurrence_details: r.recurrence_details ?? null })))
+            if (ee) setError(ee.message)
+            else setExpenses((exp ?? []).map((r: any) => ({ id: String(r.id), expense_name: r.expense_name, description: r.description ?? null, accounting_code: r.accounting_code ?? null, expense_type_id: r.expense_type_id ?? null, recurrence_rule_id: r.recurrence_rule_id ?? null, recurrence_details: r.recurrence_details ?? null })))
+        } catch (e: any) {
+            setError(e?.message || 'Failed to generate budget items')
+        } finally {
+            setGenerating(false)
+        }
+    }
 
     // per-income-type form state
     interface IncomeFormState { name: string; code: string; desc: string; saving: boolean; selectedRuleType: string; recurrenceRuleId: string; recurrenceDetails: Record<string, any> }
@@ -589,6 +612,7 @@ export default function BudgetDetailPage() {
                             <button onClick={() => router.back()} className="text-yellow-400 hover:text-yellow-300 text-sm">← Back</button>
                         </div>
                         <div className="flex items-center gap-3">
+                            <button disabled={generating} onClick={runGenerateBudgetItems} className="text-sm bg-yellow-500/10 border border-yellow-500/40 text-yellow-300 hover:bg-yellow-500/20 px-3 py-1.5 rounded disabled:opacity-50 disabled:cursor-not-allowed">{generating ? 'Generating…' : 'Generate Budget Items'}</button>
                             <span className="text-sm text-gray-300">{budget?.name}</span>
                         </div>
                     </div>
