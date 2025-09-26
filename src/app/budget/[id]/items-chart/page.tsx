@@ -69,7 +69,7 @@ export default function BudgetItemsChartPage() {
         chart.update();
     }, []);
 
-    const toggleCumulative = useCallback((group: 'income' | 'expense') => {
+    const toggleCumulative = useCallback((group: 'income' | 'expense' | 'equity') => {
         const chart = chartRef.current?.canvas && chartRef.current;
         if (!chart || !chart.data?.datasets) return;
         const idx = chart.data.datasets.findIndex((d: any) => d.group === group && d.cumulative);
@@ -279,6 +279,7 @@ export default function BudgetItemsChartPage() {
         const operationalColor = takeColor();
         const incomeCumColor = takeColor();
         const expenseCumColor = takeColor();
+        const equityCumColor = takeColor();
         const equityContribColor = takeColor();
         const equityDrawColor = takeColor();
 
@@ -290,6 +291,7 @@ export default function BudgetItemsChartPage() {
             ...incomeDatasets.map(d => ({ ...d, data: pad(d.data) })),
             { label: 'Expenses (Cumulative)', data: pad(expenseCumulative), borderColor: expenseCumColor, backgroundColor: expenseCumColor, tension: 0, pointRadius: 0, group: 'expense', cumulative: true },
             ...expenseDatasets.map(d => ({ ...d, data: pad(d.data) })),
+            { label: 'Equity (Cumulative)', data: pad(equityCumulative), borderColor: equityCumColor, backgroundColor: equityCumColor, tension: 0, pointRadius: 0, group: 'equity', cumulative: true },
             { label: 'Equity Contributions', data: pad(equityPositiveSeries), borderColor: equityContribColor, backgroundColor: equityContribColor, tension: 0, pointRadius: 2, group: 'equity' },
             { label: 'Equity Drawings', data: pad(equityNegativeSeries), borderColor: equityDrawColor, backgroundColor: equityDrawColor, tension: 0, pointRadius: 2, group: 'equity' }
         ];
@@ -505,10 +507,16 @@ export default function BudgetItemsChartPage() {
                                             className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
                                         >
                                             <span className="flex items-center gap-2">
-                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Equity Contributions', '#818cf8'), opacity: hidden['Equity Contributions'] ? 0.35 : 1 }} />
+                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Equity (Cumulative)', '#818cf8'), opacity: hidden['Equity (Cumulative)'] ? 0.35 : 1 }} />
                                                 <span>Equity</span>
                                             </span>
                                             <div className="flex items-center gap-1.5">
+                                                <button
+                                                    type="button"
+                                                    title="Toggle cumulative"
+                                                    onClick={(e) => { e.stopPropagation(); toggleCumulative('equity'); }}
+                                                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                >Σ</button>
                                                 <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('equity'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
                                                 <span>{equityGroupOpen ? '−' : '+'}</span>
                                             </div>
@@ -516,7 +524,7 @@ export default function BudgetItemsChartPage() {
                                         {equityGroupOpen && (
                                             <ul className="space-y-1 text-sm max-h-40 overflow-auto pr-1">
                                                 {(chartData?.datasets || [])
-                                                    .filter(d => (d as any).group === 'equity')
+                                                    .filter(d => (d as any).group === 'equity' && !(d as any).cumulative)
                                                     .map(ds => {
                                                         const color = ds.borderColor as string;
                                                         const isHidden = hidden[ds.label];
