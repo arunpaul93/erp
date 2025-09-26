@@ -109,9 +109,9 @@ export default function BudgetItemsChartPage() {
         // Determine labels included
         let labels: string[] = [];
         if (parent === 'bank') {
-            labels = chart.data.datasets.filter((d: any) => ['bank','operational','income','expense','equity'].includes(d.group)).map((d: any) => d.label);
+            labels = chart.data.datasets.filter((d: any) => ['bank', 'operational', 'income', 'expense', 'equity'].includes(d.group)).map((d: any) => d.label);
         } else if (parent === 'operational') {
-            labels = chart.data.datasets.filter((d: any) => ['operational','income','expense'].includes(d.group)).map((d: any) => d.label);
+            labels = chart.data.datasets.filter((d: any) => ['operational', 'income', 'expense'].includes(d.group)).map((d: any) => d.label);
         }
         // Find indices
         const indices = labels.map(l => chart.data.datasets.findIndex((d: any) => d.label === l)).filter(i => i !== -1);
@@ -188,12 +188,12 @@ export default function BudgetItemsChartPage() {
         // Compute two extra future dates for extended grid spacing
         let extendedDates = [...dates];
         if (dates.length) {
-            const parse = (s: string) => { const [y,m,d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
-            const fmt = (dt: Date) => dt.toISOString().slice(0,10);
+            const parse = (s: string) => { const [y, m, d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+            const fmt = (dt: Date) => dt.toISOString().slice(0, 10);
             const last = parse(dates[dates.length - 1]);
-            const plusDays = (base: Date, days: number) => new Date(base.getTime() + days*86400000);
+            const plusDays = (base: Date, days: number) => new Date(base.getTime() + days * 86400000);
             // Assume daily granularity; append +1 and +2 days
-            extendedDates.push(fmt(plusDays(last,1)), fmt(plusDays(last,2)));
+            extendedDates.push(fmt(plusDays(last, 1)), fmt(plusDays(last, 2)));
         }
         // Map incomeId -> date -> total
         const incomeMatrix: Record<string, Record<string, number>> = {};
@@ -221,8 +221,8 @@ export default function BudgetItemsChartPage() {
 
         // Extended color palette for distinctive lines
         const palette = [
-            '#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#10b981','#0d9488','#06b6d4','#0284c7','#2563eb','#4f46e5','#7c3aed','#9333ea','#c026d3','#db2777','#e11d48','#ea580c','#65a30d','#059669',
-            '#0ea5e9','#6366f1','#8b5cf6','#a855f7','#d946ef','#f43f5e','#facc15','#14b8a6','#3b82f6','#475569'
+            '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#10b981', '#0d9488', '#06b6d4', '#0284c7', '#2563eb', '#4f46e5', '#7c3aed', '#9333ea', '#c026d3', '#db2777', '#e11d48', '#ea580c', '#65a30d', '#059669',
+            '#0ea5e9', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#f43f5e', '#facc15', '#14b8a6', '#3b82f6', '#475569'
         ];
         let colorPtr = 0;
         const takeColor = () => {
@@ -232,7 +232,7 @@ export default function BudgetItemsChartPage() {
         };
 
         const incomeIds = Object.keys(incomeMatrix).sort();
-    const incomeTotalsPerDate = dates.map(d => incomeIds.reduce((sum, id) => sum + (incomeMatrix[id][d] || 0), 0));
+        const incomeTotalsPerDate = dates.map(d => incomeIds.reduce((sum, id) => sum + (incomeMatrix[id][d] || 0), 0));
         const incomeCumulative: number[] = [];
         incomeTotalsPerDate.reduce((acc, v, idx) => { const next = acc + v; incomeCumulative[idx] = next; return next; }, 0);
 
@@ -245,7 +245,7 @@ export default function BudgetItemsChartPage() {
         });
 
         const expenseIds = Object.keys(expenseMatrix).sort();
-    const expenseTotalsPerDate = dates.map(d => expenseIds.reduce((sum, id) => sum + (expenseMatrix[id][d] || 0), 0));
+        const expenseTotalsPerDate = dates.map(d => expenseIds.reduce((sum, id) => sum + (expenseMatrix[id][d] || 0), 0));
         const expenseCumulativeRaw: number[] = [];
         expenseTotalsPerDate.reduce((acc, v, idx) => { const next = acc + v; expenseCumulativeRaw[idx] = next; return next; }, 0);
         const expenseCumulative = expenseCumulativeRaw.map(v => -v);
@@ -261,18 +261,18 @@ export default function BudgetItemsChartPage() {
         const operationalNet: number[] = incomeCumulative.map((v, i) => v + (expenseCumulative[i] || 0));
 
         // Equity datasets
-    const equityPositiveSeries = dates.map(d => equityPosPerDate[d] || 0);
-    const equityNegativeSeries = dates.map(d => equityNegPerDate[d] || 0); // already negative
+        const equityPositiveSeries = dates.map(d => equityPosPerDate[d] || 0);
+        const equityNegativeSeries = dates.map(d => equityNegPerDate[d] || 0); // already negative
 
         // Equity cumulative (net contributions-drawings) and bank net (operational + equity cumulative)
-    const equityDailyNet = dates.map((d) => (equityPosPerDate[d] || 0) + (equityNegPerDate[d] || 0));
+        const equityDailyNet = dates.map((d) => (equityPosPerDate[d] || 0) + (equityNegPerDate[d] || 0));
         const equityCumulative: number[] = [];
         equityDailyNet.reduce((acc, v, idx) => { const next = acc + v; equityCumulative[idx] = next; return next; }, 0);
-    const bankNet = operationalNet.map((v, i) => v + (equityCumulative[i] || 0));
+        const bankNet = operationalNet.map((v, i) => v + (equityCumulative[i] || 0));
 
-    // Pad datasets with nulls for the two extended dates (if added)
-    const padCount = extendedDates.length - dates.length;
-    const pad = (arr: number[]) => padCount > 0 ? [...arr, ...Array(padCount).fill(null)] : arr;
+        // Pad datasets with nulls for the two extended dates (if added)
+        const padCount = extendedDates.length - dates.length;
+        const pad = (arr: number[]) => padCount > 0 ? [...arr, ...Array(padCount).fill(null)] : arr;
 
         // Assign unique colors for summary / cumulative datasets after base lists to avoid overlapping with incomes/expenses
         const bankColor = takeColor();
@@ -294,7 +294,7 @@ export default function BudgetItemsChartPage() {
             { label: 'Equity Drawings', data: pad(equityNegativeSeries), borderColor: equityDrawColor, backgroundColor: equityDrawColor, tension: 0, pointRadius: 2, group: 'equity' }
         ];
 
-    return { labels: extendedDates, datasets };
+        return { labels: extendedDates, datasets };
     }, [items, expenses, incomes, equityTxns]);
 
     // Helper to get current dataset color for legend headers
@@ -348,7 +348,7 @@ export default function BudgetItemsChartPage() {
                                 className="w-full flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-gray-300 mb-2 hover:text-gray-100 cursor-pointer select-none"
                             >
                                 <span className="flex items-center gap-2">
-                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Net Bank Account Balance','#fde047'), opacity: hidden['Net Bank Account Balance'] ? 0.35 : 1 }} />
+                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Net Bank Account Balance', '#fde047'), opacity: hidden['Net Bank Account Balance'] ? 0.35 : 1 }} />
                                     <span>Net Bank Account Balance</span>
                                 </span>
                                 <div className="flex items-center gap-1.5">
@@ -379,7 +379,7 @@ export default function BudgetItemsChartPage() {
                                             className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
                                         >
                                             <span className="flex items-center gap-2">
-                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Operational Cash','#fbbf24'), opacity: hidden['Operational Cash'] ? 0.35 : 1 }} />
+                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Operational Cash', '#fbbf24'), opacity: hidden['Operational Cash'] ? 0.35 : 1 }} />
                                                 <span>Operational Cash</span>
                                             </span>
                                             <div className="flex items-center gap-1.5">
@@ -410,7 +410,7 @@ export default function BudgetItemsChartPage() {
                                                         className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
                                                     >
                                                         <span className="flex items-center gap-2">
-                                                            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Income (Cumulative)','#34d399'), opacity: hidden['Income (Cumulative)'] ? 0.35 : 1 }} />
+                                                            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Income (Cumulative)', '#34d399'), opacity: hidden['Income (Cumulative)'] ? 0.35 : 1 }} />
                                                             <span>Income</span>
                                                         </span>
                                                         <div className="flex items-center gap-1.5">
@@ -456,7 +456,7 @@ export default function BudgetItemsChartPage() {
                                                         className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
                                                     >
                                                         <span className="flex items-center gap-2">
-                                                            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Expenses (Cumulative)','#fb7185'), opacity: hidden['Expenses (Cumulative)'] ? 0.35 : 1 }} />
+                                                            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Expenses (Cumulative)', '#fb7185'), opacity: hidden['Expenses (Cumulative)'] ? 0.35 : 1 }} />
                                                             <span>Expenses</span>
                                                         </span>
                                                         <div className="flex items-center gap-1.5">
@@ -505,7 +505,7 @@ export default function BudgetItemsChartPage() {
                                             className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
                                         >
                                             <span className="flex items-center gap-2">
-                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Equity Contributions','#818cf8'), opacity: hidden['Equity Contributions'] ? 0.35 : 1 }} />
+                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Equity Contributions', '#818cf8'), opacity: hidden['Equity Contributions'] ? 0.35 : 1 }} />
                                                 <span>Equity</span>
                                             </span>
                                             <div className="flex items-center gap-1.5">
