@@ -26,13 +26,16 @@ export default function BudgetItemsChartPage() {
     const [items, setItems] = useState<RawItem[]>([]);
     const [expenses, setExpenses] = useState<ExpenseMeta[]>([]);
     const [incomes, setIncomes] = useState<IncomeMeta[]>([]);
+    const [equityTxns, setEquityTxns] = useState<{ id: string; date: string; amount: number }[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const chartRef = useRef<any>(null);
     const [legendOpen, setLegendOpen] = useState(true);
     const [expensesGroupOpen, setExpensesGroupOpen] = useState(true);
     const [incomesGroupOpen, setIncomesGroupOpen] = useState(true);
+    const [bankGroupOpen, setBankGroupOpen] = useState(true);
     const [operationalGroupOpen, setOperationalGroupOpen] = useState(true);
+    const [equityGroupOpen, setEquityGroupOpen] = useState(true);
     const [hidden, setHidden] = useState<Record<string, boolean>>({});
     const [equityMsg, setEquityMsg] = useState<string | null>(null);
     const [equityLoading, setEquityLoading] = useState(false);
@@ -51,7 +54,7 @@ export default function BudgetItemsChartPage() {
         setHidden(h => ({ ...h, [label]: !currentlyHidden }));
     }, []);
 
-    const toggleGroup = useCallback((group: 'income' | 'expense') => {
+    const toggleGroup = useCallback((group: 'income' | 'expense' | 'equity') => {
         const chart = chartRef.current?.canvas && chartRef.current;
         if (!chart || !chart.data?.datasets) return;
         type Entry = { d: any; idx: number };
@@ -87,6 +90,39 @@ export default function BudgetItemsChartPage() {
         chart.setDatasetVisibility(idx, !visible);
         chart.update();
         setHidden(h => ({ ...h, ['Operational Cash']: visible }));
+    }, []);
+
+    const toggleBankNet = useCallback(() => {
+        const chart = chartRef.current?.canvas && chartRef.current;
+        if (!chart || !chart.data?.datasets) return;
+        const idx = chart.data.datasets.findIndex((d: any) => d.label === 'Net Bank Account Balance');
+        if (idx === -1) return;
+        const visible = chart.isDatasetVisible(idx);
+        chart.setDatasetVisibility(idx, !visible);
+        chart.update();
+        setHidden(h => ({ ...h, ['Net Bank Account Balance']: visible }));
+    }, []);
+
+    const toggleParentGroup = useCallback((parent: 'bank' | 'operational') => {
+        const chart = chartRef.current?.canvas && chartRef.current;
+        if (!chart || !chart.data?.datasets) return;
+        // Determine labels included
+        let labels: string[] = [];
+        if (parent === 'bank') {
+            labels = chart.data.datasets.filter((d: any) => ['bank','operational','income','expense','equity'].includes(d.group)).map((d: any) => d.label);
+        } else if (parent === 'operational') {
+            labels = chart.data.datasets.filter((d: any) => ['operational','income','expense'].includes(d.group)).map((d: any) => d.label);
+        }
+        // Find indices
+        const indices = labels.map(l => chart.data.datasets.findIndex((d: any) => d.label === l)).filter(i => i !== -1);
+        const anyVisible = indices.some(i => chart.isDatasetVisible(i));
+        indices.forEach(i => chart.setDatasetVisibility(i, !anyVisible));
+        chart.update();
+        setHidden(h => {
+            const next = { ...h };
+            labels.forEach(l => { next[l] = anyVisible; });
+            return next;
+        });
     }, []);
 
     useEffect(() => {
@@ -127,9 +163,38 @@ export default function BudgetItemsChartPage() {
         return () => { cancelled = true };
     }, [budgetId]);
 
+    useEffect(() => {
+        if (!budgetId) return;
+        let cancelled = false;
+        (async () => {
+            const { data, error } = await supabase
+                .from('budget_equity_transactions')
+                .select('id, amount, transaction_date')
+                .eq('budget_id', budgetId)
+                .order('transaction_date', { ascending: true });
+            if (cancelled) return;
+            if (error) { console.warn('Equity txns fetch error', error.message); return; }
+            setEquityTxns((data || []).map(r => ({ id: String(r.id), date: (r as any).transaction_date, amount: Number((r as any).amount) })));
+            console.log('Equity txns', data);
+        })();
+        return () => { cancelled = true };
+    }, [budgetId]);
+
     const chartData = useMemo(() => {
         if (!items.length) return null;
-        const dates = Array.from(new Set(items.map(i => i.date))).sort();
+        const dateSet = new Set(items.map(i => i.date));
+        equityTxns.forEach(t => dateSet.add(t.date));
+        const dates = Array.from(dateSet).sort();
+        // Compute two extra future dates for extended grid spacing
+        let extendedDates = [...dates];
+        if (dates.length) {
+            const parse = (s: string) => { const [y,m,d] = s.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)); };
+            const fmt = (dt: Date) => dt.toISOString().slice(0,10);
+            const last = parse(dates[dates.length - 1]);
+            const plusDays = (base: Date, days: number) => new Date(base.getTime() + days*86400000);
+            // Assume daily granularity; append +1 and +2 days
+            extendedDates.push(fmt(plusDays(last,1)), fmt(plusDays(last,2)));
+        }
         // Map incomeId -> date -> total
         const incomeMatrix: Record<string, Record<string, number>> = {};
         // Map expenseId -> date -> total
@@ -146,99 +211,97 @@ export default function BudgetItemsChartPage() {
             }
         });
 
-        // Color palette deterministic: cycle through set
+        // Equity positive/negative per date
+        const equityPosPerDate: Record<string, number> = {};
+        const equityNegPerDate: Record<string, number> = {};
+        equityTxns.forEach(t => {
+            if (t.amount >= 0) equityPosPerDate[t.date] = (equityPosPerDate[t.date] || 0) + t.amount;
+            else equityNegPerDate[t.date] = (equityNegPerDate[t.date] || 0) + t.amount; // negative values retained
+        });
+
+        // Extended color palette for distinctive lines
         const palette = [
-            '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e'
+            '#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#10b981','#0d9488','#06b6d4','#0284c7','#2563eb','#4f46e5','#7c3aed','#9333ea','#c026d3','#db2777','#e11d48','#ea580c','#65a30d','#059669',
+            '#0ea5e9','#6366f1','#8b5cf6','#a855f7','#d946ef','#f43f5e','#facc15','#14b8a6','#3b82f6','#475569'
         ];
-        const getColor = (idx: number) => palette[idx % palette.length];
+        let colorPtr = 0;
+        const takeColor = () => {
+            const c = palette[colorPtr % palette.length];
+            colorPtr++;
+            return c;
+        };
 
         const incomeIds = Object.keys(incomeMatrix).sort();
-        // Cumulative income total per date
-        const incomeTotalsPerDate = dates.map(d => incomeIds.reduce((sum, id) => sum + (incomeMatrix[id][d] || 0), 0));
+    const incomeTotalsPerDate = dates.map(d => incomeIds.reduce((sum, id) => sum + (incomeMatrix[id][d] || 0), 0));
         const incomeCumulative: number[] = [];
-        incomeTotalsPerDate.reduce((acc, v, idx) => {
-            const next = acc + v; incomeCumulative[idx] = next; return next;
-        }, 0);
+        incomeTotalsPerDate.reduce((acc, v, idx) => { const next = acc + v; incomeCumulative[idx] = next; return next; }, 0);
 
-        const incomeDatasets = incomeIds.map((incomeId, idx) => {
+        const incomeDatasets = incomeIds.map((incomeId) => {
             const series = dates.map(d => incomeMatrix[incomeId][d] || 0);
             const meta = incomes.find(i => i.id === incomeId);
             const label = meta?.name || `Income ${incomeId}`;
-            const color = '#10b981'; // base green for incomes, vary lightness if many
-            const variantColor = color;
-            return {
-                label,
-                data: series,
-                borderColor: variantColor,
-                backgroundColor: variantColor,
-                tension: 0.25,
-                pointRadius: 2,
-                group: 'income'
-            } as any;
+            const color = takeColor();
+            return { label, data: series, borderColor: color, backgroundColor: color, tension: 0, pointRadius: 2, group: 'income' } as any;
         });
 
         const expenseIds = Object.keys(expenseMatrix).sort();
-        // Expense totals per date (positive numbers before negation)
-        const expenseTotalsPerDate = dates.map(d => expenseIds.reduce((sum, id) => sum + (expenseMatrix[id][d] || 0), 0));
+    const expenseTotalsPerDate = dates.map(d => expenseIds.reduce((sum, id) => sum + (expenseMatrix[id][d] || 0), 0));
         const expenseCumulativeRaw: number[] = [];
         expenseTotalsPerDate.reduce((acc, v, idx) => { const next = acc + v; expenseCumulativeRaw[idx] = next; return next; }, 0);
-        const expenseCumulative = expenseCumulativeRaw.map(v => -v); // negative cumulative
+        const expenseCumulative = expenseCumulativeRaw.map(v => -v);
 
-        const expenseDatasets = expenseIds.map((expenseId, idx) => {
-            const series = dates.map(d => -(expenseMatrix[expenseId][d] || 0)); // negate to show as negative
+        const expenseDatasets = expenseIds.map((expenseId) => {
+            const series = dates.map(d => -(expenseMatrix[expenseId][d] || 0));
             const meta = expenses.find(e => e.id === expenseId);
             const label = meta?.name || `Expense ${expenseId}`;
-            const color = getColor(idx);
-            return {
-                label,
-                data: series,
-                borderColor: color,
-                backgroundColor: color,
-                tension: 0.25,
-                pointRadius: 1.5,
-                group: 'expense'
-            } as any;
+            const color = takeColor();
+            return { label, data: series, borderColor: color, backgroundColor: color, tension: 0, pointRadius: 1.5, group: 'expense' } as any;
         });
 
         const operationalNet: number[] = incomeCumulative.map((v, i) => v + (expenseCumulative[i] || 0));
 
-        return {
-            labels: dates,
-            datasets: [
-                {
-                    label: 'Operational Cash',
-                    data: operationalNet,
-                    borderColor: '#fbbf24',
-                    backgroundColor: '#fbbf24',
-                    tension: 0.25,
-                    pointRadius: 0,
-                    group: 'operational'
-                } as any,
-                {
-                    label: 'Income (Cumulative)',
-                    data: incomeCumulative,
-                    borderColor: '#34d399',
-                    backgroundColor: '#34d399',
-                    tension: 0.2,
-                    pointRadius: 0,
-                    group: 'income',
-                    cumulative: true
-                } as any,
-                ...incomeDatasets,
-                {
-                    label: 'Expenses (Cumulative)',
-                    data: expenseCumulative,
-                    borderColor: '#fb7185',
-                    backgroundColor: '#fb7185',
-                    tension: 0.2,
-                    pointRadius: 0,
-                    group: 'expense',
-                    cumulative: true
-                } as any,
-                ...expenseDatasets
-            ]
-        };
-    }, [items, expenses, incomes]);
+        // Equity datasets
+    const equityPositiveSeries = dates.map(d => equityPosPerDate[d] || 0);
+    const equityNegativeSeries = dates.map(d => equityNegPerDate[d] || 0); // already negative
+
+        // Equity cumulative (net contributions-drawings) and bank net (operational + equity cumulative)
+    const equityDailyNet = dates.map((d) => (equityPosPerDate[d] || 0) + (equityNegPerDate[d] || 0));
+        const equityCumulative: number[] = [];
+        equityDailyNet.reduce((acc, v, idx) => { const next = acc + v; equityCumulative[idx] = next; return next; }, 0);
+    const bankNet = operationalNet.map((v, i) => v + (equityCumulative[i] || 0));
+
+    // Pad datasets with nulls for the two extended dates (if added)
+    const padCount = extendedDates.length - dates.length;
+    const pad = (arr: number[]) => padCount > 0 ? [...arr, ...Array(padCount).fill(null)] : arr;
+
+        // Assign unique colors for summary / cumulative datasets after base lists to avoid overlapping with incomes/expenses
+        const bankColor = takeColor();
+        const operationalColor = takeColor();
+        const incomeCumColor = takeColor();
+        const expenseCumColor = takeColor();
+        const equityContribColor = takeColor();
+        const equityDrawColor = takeColor();
+
+        // Prepend summary datasets (ensuring their colors differ from children)
+        const datasets: any[] = [
+            { label: 'Net Bank Account Balance', data: pad(bankNet), borderColor: bankColor, backgroundColor: bankColor, tension: 0, pointRadius: 0, group: 'bank' },
+            { label: 'Operational Cash', data: pad(operationalNet), borderColor: operationalColor, backgroundColor: operationalColor, tension: 0, pointRadius: 0, group: 'operational' },
+            { label: 'Income (Cumulative)', data: pad(incomeCumulative), borderColor: incomeCumColor, backgroundColor: incomeCumColor, tension: 0, pointRadius: 0, group: 'income', cumulative: true },
+            ...incomeDatasets.map(d => ({ ...d, data: pad(d.data) })),
+            { label: 'Expenses (Cumulative)', data: pad(expenseCumulative), borderColor: expenseCumColor, backgroundColor: expenseCumColor, tension: 0, pointRadius: 0, group: 'expense', cumulative: true },
+            ...expenseDatasets.map(d => ({ ...d, data: pad(d.data) })),
+            { label: 'Equity Contributions', data: pad(equityPositiveSeries), borderColor: equityContribColor, backgroundColor: equityContribColor, tension: 0, pointRadius: 2, group: 'equity' },
+            { label: 'Equity Drawings', data: pad(equityNegativeSeries), borderColor: equityDrawColor, backgroundColor: equityDrawColor, tension: 0, pointRadius: 2, group: 'equity' }
+        ];
+
+    return { labels: extendedDates, datasets };
+    }, [items, expenses, incomes, equityTxns]);
+
+    // Helper to get current dataset color for legend headers
+    const getHeaderColor = (label: string, fallback: string) => {
+        const ds = chartData?.datasets.find(d => (d as any).label === label) as any;
+        return ds?.borderColor || fallback;
+    };
 
     const submitEquityBuffer = useCallback(async () => {
         if (!budgetId) return;
@@ -274,177 +337,255 @@ export default function BudgetItemsChartPage() {
                     {legendOpen ? '◀' : '▶'}
                 </button>
                 {legendOpen && (
-                    <div className="flex-1 overflow-auto p-3 space-y-4">
-                        <div className="space-y-3">
-                            {/* Operational Cash parent */}
-                            <div>
-                                <div
-                                    role="button"
-                                    tabIndex={0}
-                                    onClick={() => setOperationalGroupOpen(o => !o)}
-                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOperationalGroupOpen(o => !o); } }}
-                                    className="w-full flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-gray-300 mb-2 hover:text-gray-100 cursor-pointer select-none"
-                                >
-                                    <span className="flex items-center gap-2">
-                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#fbbf24', opacity: hidden['Operational Cash'] ? 0.35 : 1 }} />
-                                        <span>Operational Cash</span>
-                                    </span>
-                                    <div className="flex items-center gap-1.5">
-                                        <button
-                                            type="button"
-                                            title="Toggle operational cash"
-                                            onClick={(e) => { e.stopPropagation(); toggleOperational(); }}
-                                            className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
-                                        >Σ</button>
-                                        <span>{operationalGroupOpen ? '−' : '+'}</span>
-                                    </div>
+                    <div className="flex-1 overflow-auto p-3 space-y-6">
+                        {/* Net Bank Account Balance parent */}
+                        <div>
+                            <div
+                                role="button"
+                                tabIndex={0}
+                                onClick={() => setBankGroupOpen(o => !o)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setBankGroupOpen(o => !o); } }}
+                                className="w-full flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-gray-300 mb-2 hover:text-gray-100 cursor-pointer select-none"
+                            >
+                                <span className="flex items-center gap-2">
+                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Net Bank Account Balance','#fde047'), opacity: hidden['Net Bank Account Balance'] ? 0.35 : 1 }} />
+                                    <span>Net Bank Account Balance</span>
+                                </span>
+                                <div className="flex items-center gap-1.5">
+                                    <button
+                                        type="button"
+                                        title="Toggle net bank balance"
+                                        onClick={(e) => { e.stopPropagation(); toggleBankNet(); }}
+                                        className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                    >Σ</button>
+                                    <button
+                                        type="button"
+                                        title="Toggle all children"
+                                        onClick={(e) => { e.stopPropagation(); toggleParentGroup('bank'); }}
+                                        className="text-[10px] px-1 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                    >All</button>
+                                    <span>{bankGroupOpen ? '−' : '+'}</span>
                                 </div>
-                                {operationalGroupOpen && (
-                                    <div className="pl-3 border-l border-gray-800 space-y-4">
-                                        {/* Income section (nested) */}
-                                        <div>
-                                            <div
-                                                role="button"
-                                                tabIndex={0}
-                                                onClick={() => setIncomesGroupOpen(o => !o)}
-                                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIncomesGroupOpen(o => !o); } }}
-                                                className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
-                                            >
-                                                <span className="flex items-center gap-2">
-                                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#34d399', opacity: hidden['Income (Cumulative)'] ? 0.35 : 1 }} />
-                                                    <span>Income</span>
-                                                </span>
-                                                <div className="flex items-center gap-1.5">
-                                                    <button
-                                                        type="button"
-                                                        title="Toggle cumulative"
-                                                        onClick={(e) => { e.stopPropagation(); toggleCumulative('income'); }}
-                                                        className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
-                                                    >Σ</button>
-                                                    <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('income'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
-                                                    <span>{incomesGroupOpen ? '−' : '+'}</span>
-                                                </div>
-                                            </div>
-                                            {incomesGroupOpen && (
-                                                <ul className="space-y-1 text-sm max-h-64 overflow-auto pr-1">
-                                                    {(chartData?.datasets || [])
-                                                        .filter(d => (d as any).group === 'income' && !(d as any).cumulative)
-                                                        .map(ds => {
-                                                            const color = ds.borderColor as string;
-                                                            const isHidden = hidden[ds.label];
-                                                            return (
-                                                                <li key={ds.label}>
-                                                                    <button
-                                                                        onClick={() => toggleDataset(ds.label)}
-                                                                        className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
-                                                                    >
-                                                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
-                                                                        <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
-                                                                    </button>
-                                                                </li>
-                                                            );
-                                                        })}
-                                                </ul>
-                                            )}
-                                        </div>
-                                        {/* Expenses section (nested) */}
-                                        <div>
-                                            <div
-                                                role="button"
-                                                tabIndex={0}
-                                                onClick={() => setExpensesGroupOpen(o => !o)}
-                                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpensesGroupOpen(o => !o); } }}
-                                                className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
-                                            >
-                                                <span className="flex items-center gap-2">
-                                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#fb7185', opacity: hidden['Expenses (Cumulative)'] ? 0.35 : 1 }} />
-                                                    <span>Expenses</span>
-                                                </span>
-                                                <div className="flex items-center gap-1.5">
-                                                    <button
-                                                        type="button"
-                                                        title="Toggle cumulative"
-                                                        onClick={(e) => { e.stopPropagation(); toggleCumulative('expense'); }}
-                                                        className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
-                                                    >Σ</button>
-                                                    <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('expense'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
-                                                    <span>{expensesGroupOpen ? '−' : '+'}</span>
-                                                </div>
-                                            </div>
-                                            {expensesGroupOpen && (
-                                                <ul className="space-y-1 text-sm max-h-64 overflow-auto pr-1">
-                                                    {(chartData?.datasets || [])
-                                                        .filter(d => (d as any).group === 'expense' && !(d as any).cumulative)
-                                                        .map(ds => {
-                                                            const color = ds.borderColor as string;
-                                                            const isHidden = hidden[ds.label];
-                                                            return (
-                                                                <li key={ds.label}>
-                                                                    <button
-                                                                        onClick={() => toggleDataset(ds.label)}
-                                                                        className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
-                                                                    >
-                                                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
-                                                                        <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
-                                                                    </button>
-                                                                </li>
-                                                            );
-                                                        })}
-                                                </ul>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
                             </div>
-                            {/* Equity buffer action below group */}
-                            <div className="pt-1 space-y-2">
-                                <button
-                                    type="button"
-                                    disabled={equityLoading}
-                                    onClick={handleEnsureEquityBuffer}
-                                    className="w-full text-[10px] font-semibold uppercase tracking-wide rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed px-2 py-1"
-                                >Ensure Equity Buffer</button>
-                                {equityFormOpen && (
-                                    <div className="space-y-2 rounded border border-amber-700 bg-gray-800/70 p-2">
-                                        <div className="flex gap-2">
-                                            <div className="flex-1">
-                                                <label className="block text-[9px] uppercase tracking-wide text-gray-400 mb-0.5">Min</label>
-                                                <input
-                                                    value={minInput}
-                                                    onChange={e => setMinInput(e.target.value)}
-                                                    type="number"
-                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                                    placeholder="e.g. 100"
-                                                />
-                                            </div>
-                                            <div className="flex-1">
-                                                <label className="block text-[9px] uppercase tracking-wide text-gray-400 mb-0.5">Max</label>
-                                                <input
-                                                    value={maxInput}
-                                                    onChange={e => setMaxInput(e.target.value)}
-                                                    type="number"
-                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                                    placeholder="e.g. 250"
-                                                />
+                            {bankGroupOpen && (
+                                <div className="pl-3 border-l border-gray-800 space-y-6">
+                                    {/* Operational Cash subsection */}
+                                    <div>
+                                        <div
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => setOperationalGroupOpen(o => !o)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOperationalGroupOpen(o => !o); } }}
+                                            className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Operational Cash','#fbbf24'), opacity: hidden['Operational Cash'] ? 0.35 : 1 }} />
+                                                <span>Operational Cash</span>
+                                            </span>
+                                            <div className="flex items-center gap-1.5">
+                                                <button
+                                                    type="button"
+                                                    title="Toggle operational cash"
+                                                    onClick={(e) => { e.stopPropagation(); toggleOperational(); }}
+                                                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                >Σ</button>
+                                                <button
+                                                    type="button"
+                                                    title="Toggle all operational children"
+                                                    onClick={(e) => { e.stopPropagation(); toggleParentGroup('operational'); }}
+                                                    className="text-[10px] px-1 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                >All</button>
+                                                <span>{operationalGroupOpen ? '−' : '+'}</span>
                                             </div>
                                         </div>
-                                        <div className="flex items-center justify-end gap-2 pt-1">
-                                            <button
-                                                type="button"
-                                                onClick={() => { setEquityFormOpen(false); }}
-                                                className="text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-gray-700"
-                                            >Cancel</button>
+                                        {operationalGroupOpen && (
+                                            <div className="pl-3 border-l border-gray-800 space-y-4">
+                                                {/* Income section */}
+                                                <div>
+                                                    <div
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={() => setIncomesGroupOpen(o => !o)}
+                                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIncomesGroupOpen(o => !o); } }}
+                                                        className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Income (Cumulative)','#34d399'), opacity: hidden['Income (Cumulative)'] ? 0.35 : 1 }} />
+                                                            <span>Income</span>
+                                                        </span>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <button
+                                                                type="button"
+                                                                title="Toggle cumulative"
+                                                                onClick={(e) => { e.stopPropagation(); toggleCumulative('income'); }}
+                                                                className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                            >Σ</button>
+                                                            <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('income'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
+                                                            <span>{incomesGroupOpen ? '−' : '+'}</span>
+                                                        </div>
+                                                    </div>
+                                                    {incomesGroupOpen && (
+                                                        <ul className="space-y-1 text-sm max-h-64 overflow-auto pr-1">
+                                                            {(chartData?.datasets || [])
+                                                                .filter(d => (d as any).group === 'income' && !(d as any).cumulative)
+                                                                .map(ds => {
+                                                                    const color = ds.borderColor as string;
+                                                                    const isHidden = hidden[ds.label];
+                                                                    return (
+                                                                        <li key={ds.label}>
+                                                                            <button
+                                                                                onClick={() => toggleDataset(ds.label)}
+                                                                                className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
+                                                                            >
+                                                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
+                                                                                <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
+                                                                            </button>
+                                                                        </li>
+                                                                    );
+                                                                })}
+                                                        </ul>
+                                                    )}
+                                                </div>
+                                                {/* Expenses section */}
+                                                <div>
+                                                    <div
+                                                        role="button"
+                                                        tabIndex={0}
+                                                        onClick={() => setExpensesGroupOpen(o => !o)}
+                                                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpensesGroupOpen(o => !o); } }}
+                                                        className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
+                                                    >
+                                                        <span className="flex items-center gap-2">
+                                                            <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Expenses (Cumulative)','#fb7185'), opacity: hidden['Expenses (Cumulative)'] ? 0.35 : 1 }} />
+                                                            <span>Expenses</span>
+                                                        </span>
+                                                        <div className="flex items-center gap-1.5">
+                                                            <button
+                                                                type="button"
+                                                                title="Toggle cumulative"
+                                                                onClick={(e) => { e.stopPropagation(); toggleCumulative('expense'); }}
+                                                                className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                            >Σ</button>
+                                                            <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('expense'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
+                                                            <span>{expensesGroupOpen ? '−' : '+'}</span>
+                                                        </div>
+                                                    </div>
+                                                    {expensesGroupOpen && (
+                                                        <ul className="space-y-1 text-sm max-h-64 overflow-auto pr-1">
+                                                            {(chartData?.datasets || [])
+                                                                .filter(d => (d as any).group === 'expense' && !(d as any).cumulative)
+                                                                .map(ds => {
+                                                                    const color = ds.borderColor as string;
+                                                                    const isHidden = hidden[ds.label];
+                                                                    return (
+                                                                        <li key={ds.label}>
+                                                                            <button
+                                                                                onClick={() => toggleDataset(ds.label)}
+                                                                                className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
+                                                                            >
+                                                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
+                                                                                <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
+                                                                            </button>
+                                                                        </li>
+                                                                    );
+                                                                })}
+                                                        </ul>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                    {/* Equity subsection */}
+                                    <div>
+                                        <div
+                                            role="button"
+                                            tabIndex={0}
+                                            onClick={() => setEquityGroupOpen(o => !o)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setEquityGroupOpen(o => !o); } }}
+                                            className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getHeaderColor('Equity Contributions','#818cf8'), opacity: hidden['Equity Contributions'] ? 0.35 : 1 }} />
+                                                <span>Equity</span>
+                                            </span>
+                                            <div className="flex items-center gap-1.5">
+                                                <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('equity'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
+                                                <span>{equityGroupOpen ? '−' : '+'}</span>
+                                            </div>
+                                        </div>
+                                        {equityGroupOpen && (
+                                            <ul className="space-y-1 text-sm max-h-40 overflow-auto pr-1">
+                                                {(chartData?.datasets || [])
+                                                    .filter(d => (d as any).group === 'equity')
+                                                    .map(ds => {
+                                                        const color = ds.borderColor as string;
+                                                        const isHidden = hidden[ds.label];
+                                                        return (
+                                                            <li key={ds.label}>
+                                                                <button
+                                                                    onClick={() => toggleDataset(ds.label)}
+                                                                    className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
+                                                                >
+                                                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
+                                                                    <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
+                                                                </button>
+                                                            </li>
+                                                        );
+                                                    })}
+                                            </ul>
+                                        )}
+                                        {/* Equity buffer action */}
+                                        <div className="pt-2 space-y-2">
                                             <button
                                                 type="button"
                                                 disabled={equityLoading}
-                                                onClick={submitEquityBuffer}
-                                                className="text-[10px] px-2 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50"
-                                            >{equityLoading ? 'Running...' : 'Run'}</button>
+                                                onClick={handleEnsureEquityBuffer}
+                                                className="w-full text-[10px] font-semibold uppercase tracking-wide rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed px-2 py-1"
+                                            >Ensure Equity Buffer</button>
+                                            {equityFormOpen && (
+                                                <div className="space-y-2 rounded border border-amber-700 bg-gray-800/70 p-2">
+                                                    <div className="flex gap-2">
+                                                        <div className="flex-1">
+                                                            <label className="block text-[9px] uppercase tracking-wide text-gray-400 mb-0.5">Min</label>
+                                                            <input
+                                                                value={minInput}
+                                                                onChange={e => setMinInput(e.target.value)}
+                                                                type="number"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                                placeholder="e.g. 100"
+                                                            />
+                                                        </div>
+                                                        <div className="flex-1">
+                                                            <label className="block text-[9px] uppercase tracking-wide text-gray-400 mb-0.5">Max</label>
+                                                            <input
+                                                                value={maxInput}
+                                                                onChange={e => setMaxInput(e.target.value)}
+                                                                type="number"
+                                                                className="w-full bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                                placeholder="e.g. 250"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center justify-end gap-2 pt-1">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => { setEquityFormOpen(false); }}
+                                                            className="text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-gray-700"
+                                                        >Cancel</button>
+                                                        <button
+                                                            type="button"
+                                                            disabled={equityLoading}
+                                                            onClick={submitEquityBuffer}
+                                                            className="text-[10px] px-2 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50"
+                                                        >{equityLoading ? 'Running...' : 'Run'}</button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            {equityMsg && <p className="text-[10px] text-gray-400 leading-snug">{equityMsg}</p>}
                                         </div>
                                     </div>
-                                )}
-                                {equityMsg && <p className="text-[10px] text-gray-400 leading-snug">{equityMsg}</p>}
-                            </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}
@@ -478,7 +619,21 @@ export default function BudgetItemsChartPage() {
                                         },
                                         y: {
                                             ticks: { color: '#9ca3af' },
-                                            grid: { color: '#1f2937' }
+                                            grid: { color: '#1f2937' },
+                                            afterDataLimits: (scale: any) => {
+                                                const range = (scale.max - scale.min) || 1;
+                                                const roughStep = range / 10;
+                                                const pow10 = Math.pow(10, Math.floor(Math.log10(roughStep)));
+                                                const mult = roughStep / pow10;
+                                                let step: number;
+                                                if (mult >= 5) step = 5 * pow10; else if (mult >= 2) step = 2 * pow10; else step = pow10;
+                                                scale.min -= step * 2;
+                                                scale.max += step * 2;
+                                                // apply step for ticks (dynamic fit with padding)
+                                                if (scale.options && scale.options.ticks) {
+                                                    scale.options.ticks.stepSize = step;
+                                                }
+                                            }
                                         }
                                     }
                                 }}
