@@ -28,10 +28,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-gray-950 text-gray-100 overflow-x-hidden`}
+        suppressHydrationWarning
       >
+        {/* Clean up any extension-injected attributes early on client */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(()=>{try{var b=document.body;if(!b)return;['bis_register'].forEach(a=>b.removeAttribute(a));for(const attr of Array.from(b.attributes)){if(/^__processed_/.test(attr.name)){b.removeAttribute(attr.name)}}}catch(e){}})();`
+          }}
+        />
         <AuthProvider>
           <OrgProvider>
             {children}

@@ -1,415 +1,492 @@
-'use client'
+"use client";
 
-import { useEffect, useState, useMemo, useRef } from 'react'
-import { useParams, useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
-import { useAuth } from '@/contexts/AuthContext'
-import { useOrg } from '@/contexts/OrgContext'
+import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { useParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 import {
     Chart as ChartJS,
     LineElement,
     PointElement,
     LinearScale,
-    Tooltip,
-    Legend,
-    Filler,
     CategoryScale,
-} from 'chart.js'
-import { Line } from 'react-chartjs-2'
+    Tooltip,
+    Legend
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
 
-ChartJS.register(LineElement, PointElement, LinearScale, Tooltip, Legend, Filler, CategoryScale)
+ChartJS.register(LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend);
 
-// Plugin to force zero line always visible on y-axis even after zoom/pan
-const alwaysZeroLinePlugin = {
-    id: 'alwaysZeroLine',
-    // Called during scale fit; adjust min/max to include 0
-    afterDataLimits(scale: any) {
-        if (scale.id === 'y') {
-            if (scale.min > 0) scale.min = 0
-            if (scale.max < 0) scale.max = 0
-        }
-    }
-}
-ChartJS.register(alwaysZeroLinePlugin as any)
-
-// Draw a visible baseline at y=0 regardless of grid toggle
-const zeroBaselinePlugin = {
-    id: 'zeroBaseline',
-    afterDraw: (chart: any) => {
-        const yScale = chart.scales?.y
-        if (!yScale) return
-        const y = yScale.getPixelForValue(0)
-        if (!isFinite(y)) return
-        const { left, right, top, bottom } = chart.chartArea
-        if (y < top - 5 || y > bottom + 5) return // outside view
-        const ctx = chart.ctx
-        ctx.save()
-        ctx.lineWidth = 1.5
-        ctx.strokeStyle = '#475569' // slate-600 like
-        ctx.setLineDash([5, 3])
-        ctx.beginPath()
-        ctx.moveTo(left, y)
-        ctx.lineTo(right, y)
-        ctx.stroke()
-        ctx.restore()
-    }
-}
-ChartJS.register(zeroBaselinePlugin as any)
-
-interface BudgetItemPoint { id: string; date: string; amount: number; type: 'income' | 'expense'; name: string }
-interface EquityTxn { id: string; date: string; amount: number; description?: string | null }
+interface RawItem { id: string; date: string; amount: number; budget_income_id?: string | null; budget_expense_id?: string | null }
+interface ExpenseMeta { id: string; name: string | null }
+interface IncomeMeta { id: string; name: string | null }
 
 export default function BudgetItemsChartPage() {
-    const router = useRouter()
-    const params = useParams() as { id?: string }
-    const budgetId = String(params?.id ?? '')
-    const { user, loading: authLoading } = useAuth()
-    const { selectedOrgId, loading: orgLoading } = useOrg()
+    const params = useParams() as { id?: string };
+    const budgetId = params?.id ? String(params.id) : '';
+    const [items, setItems] = useState<RawItem[]>([]);
+    const [expenses, setExpenses] = useState<ExpenseMeta[]>([]);
+    const [incomes, setIncomes] = useState<IncomeMeta[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const chartRef = useRef<any>(null);
+    const [legendOpen, setLegendOpen] = useState(true);
+    const [expensesGroupOpen, setExpensesGroupOpen] = useState(true);
+    const [incomesGroupOpen, setIncomesGroupOpen] = useState(true);
+    const [operationalGroupOpen, setOperationalGroupOpen] = useState(true);
+    const [hidden, setHidden] = useState<Record<string, boolean>>({});
+    const [equityMsg, setEquityMsg] = useState<string | null>(null);
+    const [equityLoading, setEquityLoading] = useState(false);
+    const [equityFormOpen, setEquityFormOpen] = useState(false);
+    const [minInput, setMinInput] = useState('0');
+    const [maxInput, setMaxInput] = useState('200');
 
-    const [items, setItems] = useState<BudgetItemPoint[]>([])
-    const [equityTxns, setEquityTxns] = useState<EquityTxn[]>([])
-    const [loading, setLoading] = useState(false)
-    const [error, setError] = useState<string | null>(null)
-    const chartRef = useRef<any>(null)
-    const [mode, setMode] = useState<'pan' | 'box-zoom'>('pan')
-    const [gridOn, setGridOn] = useState(false)
-    const [zoomReady, setZoomReady] = useState(false)
-    const [minEquity, setMinEquity] = useState<number>(0)
-    const [maxEquity, setMaxEquity] = useState<number>(50)
-    const [equityProcessing, setEquityProcessing] = useState(false)
-    const [reloadKey, setReloadKey] = useState(0)
-    const [showEquityConfig, setShowEquityConfig] = useState(false)
-    const [tempMin, setTempMin] = useState<number>(0)
-    const [tempMax, setTempMax] = useState<number>(50)
-    // Lazy-load zoom plugin only in browser to avoid SSR window reference
+    const toggleDataset = useCallback((label: string) => {
+        const chart = chartRef.current?.canvas && chartRef.current; // react-chartjs-2 ref points to ChartJS instance
+        if (!chart) return;
+        const index = chart.data.datasets.findIndex((d: any) => d.label === label);
+        if (index === -1) return;
+        const currentlyHidden = chart.isDatasetVisible(index) === false;
+        chart.setDatasetVisibility(index, currentlyHidden); // invert
+        chart.update();
+        setHidden(h => ({ ...h, [label]: !currentlyHidden }));
+    }, []);
+
+    const toggleGroup = useCallback((group: 'income' | 'expense') => {
+        const chart = chartRef.current?.canvas && chartRef.current;
+        if (!chart || !chart.data?.datasets) return;
+        type Entry = { d: any; idx: number };
+        const indices: Entry[] = chart.data.datasets
+            .map((d: any, idx: number) => ({ d, idx }))
+            .filter((o: Entry) => o.d.group === group && !o.d.cumulative);
+        const anyVisible = indices.some((o: Entry) => chart.isDatasetVisible(o.idx));
+        indices.forEach((o: Entry) => {
+            chart.setDatasetVisibility(o.idx, !anyVisible);
+            setHidden(h => ({ ...h, [o.d.label]: anyVisible ? true : false }));
+        });
+        chart.update();
+    }, []);
+
+    const toggleCumulative = useCallback((group: 'income' | 'expense') => {
+        const chart = chartRef.current?.canvas && chartRef.current;
+        if (!chart || !chart.data?.datasets) return;
+        const idx = chart.data.datasets.findIndex((d: any) => d.group === group && d.cumulative);
+        if (idx === -1) return;
+        const ds = chart.data.datasets[idx];
+        const isCurrentlyVisible = chart.isDatasetVisible(idx);
+        chart.setDatasetVisibility(idx, !isCurrentlyVisible);
+        chart.update();
+        setHidden(h => ({ ...h, [ds.label]: isCurrentlyVisible }));
+    }, []);
+
+    const toggleOperational = useCallback(() => {
+        const chart = chartRef.current?.canvas && chartRef.current;
+        if (!chart || !chart.data?.datasets) return;
+        const idx = chart.data.datasets.findIndex((d: any) => d.label === 'Operational Cash');
+        if (idx === -1) return;
+        const visible = chart.isDatasetVisible(idx);
+        chart.setDatasetVisibility(idx, !visible);
+        chart.update();
+        setHidden(h => ({ ...h, ['Operational Cash']: visible }));
+    }, []);
+
     useEffect(() => {
-        if (typeof window === 'undefined') return
-        let active = true
-            ; (async () => {
-                try {
-                    const mod = await import('chartjs-plugin-zoom')
-                    if (!active) return
-                    // Register only once
-                    // @ts-ignore
-                    if (!(ChartJS as any)._zoomRegistered) {
-                        ChartJS.register(mod.default)
-                            ; (ChartJS as any)._zoomRegistered = true
-                    }
-                    setZoomReady(true)
-                } catch (e) {
-                    console.error('Failed to load zoom plugin', e)
-                }
-            })()
-        return () => { active = false }
-    }, [])
-
-    useEffect(() => { if (!authLoading && !user) router.push('/login') }, [authLoading, user, router])
-
-    useEffect(() => {
-        const load = async () => {
-            if (!budgetId || !selectedOrgId) return
-            setLoading(true)
-            setError(null)
-            // Fetch incomes + expenses -> budget_items already materialised by generate fn
-            const { data, error } = await supabase
-                .from('budget_items')
-                .select('id, name, amount, date, budget_income_id, budget_expense_id')
-                .eq('budget_id', budgetId)
-                .eq('organisation_id', selectedOrgId)
-                .order('date', { ascending: true })
-
-            if (error) {
-                setError(error.message)
-                setItems([])
-            } else {
-                const mapped: BudgetItemPoint[] = (data ?? []).map((r: any) => ({
-                    id: String(r.id),
-                    date: r.date,
-                    amount: Number(r.amount),
-                    type: r.budget_income_id ? 'income' : 'expense',
-                    name: r.name || (r.budget_income_id ? 'Income' : 'Expense')
-                }))
-                setItems(mapped)
-            }
-            // Load equity transactions separately
-            if (budgetId && selectedOrgId) {
-                const { data: eqData, error: eqErr } = await supabase
-                    .from('budget_equity_transactions')
-                    .select('id, transaction_date, amount, description')
+        if (!budgetId) return;
+        let cancelled = false;
+        (async () => {
+            setLoading(true); setError(null);
+            const [itemsRes, expensesRes, incomesRes] = await Promise.all([
+                supabase
+                    .from('budget_items')
+                    .select('id, amount, date, budget_income_id, budget_expense_id')
                     .eq('budget_id', budgetId)
-                    .eq('organisation_id', selectedOrgId)
-                    .order('transaction_date', { ascending: true })
-                if (eqErr) {
-                    console.error('Equity load error', eqErr.message)
-                } else {
-                    setEquityTxns((eqData ?? []).map((r: any) => ({
-                        id: String(r.id),
-                        date: r.transaction_date,
-                        amount: Number(r.amount),
-                        description: r.description
-                    })))
-                }
-            }
-            setLoading(false)
-        }
-        load()
-    }, [budgetId, selectedOrgId, reloadKey])
+                    .order('date', { ascending: true }),
+                supabase
+                    .from('budget_expenses')
+                    .select('id, expense_name')
+                    .eq('budget_id', budgetId),
+                supabase
+                    .from('budget_incomes')
+                    .select('id, income_name')
+                    .eq('budget_id', budgetId)
+            ]);
+            if (cancelled) return;
+            if (itemsRes.error) { setError(itemsRes.error.message); setLoading(false); return; }
+            if (expensesRes.error) { setError(expensesRes.error.message); setLoading(false); return; }
+            if (incomesRes.error) { setError(incomesRes.error.message); setLoading(false); return; }
+            setItems((itemsRes.data || []).map(r => ({
+                id: String(r.id),
+                date: r.date,
+                amount: Number(r.amount),
+                budget_income_id: r.budget_income_id,
+                budget_expense_id: r.budget_expense_id
+            })));
+            setExpenses((expensesRes.data || []).map(e => ({ id: String(e.id), name: (e as any).expense_name })));
+            setIncomes((incomesRes.data || []).map(i => ({ id: String(i.id), name: (i as any).income_name })));
+            setLoading(false);
+        })();
+        return () => { cancelled = true };
+    }, [budgetId]);
 
-    const runEnsureEquity = async () => {
-        if (!budgetId) return
-        setEquityProcessing(true)
-        try {
-            const { data, error: rpcError } = await supabase.rpc('ensure_budget_equity_buffer', {
-                p_budget_id: budgetId,
-                p_min_balance: minEquity,
-                p_max_balance: maxEquity,
-            })
-            if (rpcError) {
-                setError(rpcError.message)
-            } else {
-                // Trigger reload of equity + items (some items might depend indirectly)
-                setReloadKey(k => k + 1)
+    const chartData = useMemo(() => {
+        if (!items.length) return null;
+        const dates = Array.from(new Set(items.map(i => i.date))).sort();
+        // Map incomeId -> date -> total
+        const incomeMatrix: Record<string, Record<string, number>> = {};
+        // Map expenseId -> date -> total
+        const expenseMatrix: Record<string, Record<string, number>> = {};
+        items.forEach(i => {
+            if (i.budget_income_id) {
+                const incId = i.budget_income_id;
+                if (!incomeMatrix[incId]) incomeMatrix[incId] = {};
+                incomeMatrix[incId][i.date] = (incomeMatrix[incId][i.date] || 0) + i.amount;
+            } else if (i.budget_expense_id) {
+                const exId = i.budget_expense_id;
+                if (!expenseMatrix[exId]) expenseMatrix[exId] = {};
+                expenseMatrix[exId][i.date] = (expenseMatrix[exId][i.date] || 0) + i.amount;
             }
-        } catch (e: any) {
-            setError(e.message || 'Failed to calculate equity transactions')
-        } finally {
-            setEquityProcessing(false)
-        }
-    }
+        });
 
-    const combinedData = useMemo(() => {
-        if (!items.length && !equityTxns.length) return null
-        // Aggregate income & expense by date
-        const incomeByDate: Record<string, number> = {}
-        const expenseByDate: Record<string, number> = {}
-        items.forEach(it => {
-            if (it.type === 'income') {
-                incomeByDate[it.date] = (incomeByDate[it.date] || 0) + it.amount
-            } else {
-                expenseByDate[it.date] = (expenseByDate[it.date] || 0) + it.amount
-            }
-        })
-        const equityByDate: Record<string, number> = {}
-        equityTxns.forEach(tx => {
-            equityByDate[tx.date] = (equityByDate[tx.date] || 0) + tx.amount
-        })
-        const labels = Array.from(new Set([...items.map(i => i.date), ...equityTxns.map(e => e.date)])).sort()
-        // Compute arrays
-        const incomes = labels.map(d => incomeByDate[d] || 0)
-        const expenses = labels.map(d => expenseByDate[d] || 0)
-        // Cumulative net (income - expense)
-        let running = 0
-        const cumulative = incomes.map((inc, idx) => {
-            const exp = expenses[idx]
-            running += inc - exp
-            return Number(running.toFixed(2))
-        })
-        // Cumulative equity balance over time (sum of equity transaction amounts)
-        let equityRunning = 0
-        const equityCumulative = labels.map(date => {
-            if (equityByDate[date]) equityRunning += equityByDate[date]
-            return Number(equityRunning.toFixed(2))
-        })
+        // Color palette deterministic: cycle through set
+        const palette = [
+            '#ef4444', '#f97316', '#f59e0b', '#eab308', '#84cc16', '#22c55e', '#10b981', '#14b8a6', '#06b6d4', '#0ea5e9', '#3b82f6', '#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899', '#f43f5e'
+        ];
+        const getColor = (idx: number) => palette[idx % palette.length];
+
+        const incomeIds = Object.keys(incomeMatrix).sort();
+        // Cumulative income total per date
+        const incomeTotalsPerDate = dates.map(d => incomeIds.reduce((sum, id) => sum + (incomeMatrix[id][d] || 0), 0));
+        const incomeCumulative: number[] = [];
+        incomeTotalsPerDate.reduce((acc, v, idx) => {
+            const next = acc + v; incomeCumulative[idx] = next; return next;
+        }, 0);
+
+        const incomeDatasets = incomeIds.map((incomeId, idx) => {
+            const series = dates.map(d => incomeMatrix[incomeId][d] || 0);
+            const meta = incomes.find(i => i.id === incomeId);
+            const label = meta?.name || `Income ${incomeId}`;
+            const color = '#10b981'; // base green for incomes, vary lightness if many
+            const variantColor = color;
+            return {
+                label,
+                data: series,
+                borderColor: variantColor,
+                backgroundColor: variantColor,
+                tension: 0.25,
+                pointRadius: 2,
+                group: 'income'
+            } as any;
+        });
+
+        const expenseIds = Object.keys(expenseMatrix).sort();
+        // Expense totals per date (positive numbers before negation)
+        const expenseTotalsPerDate = dates.map(d => expenseIds.reduce((sum, id) => sum + (expenseMatrix[id][d] || 0), 0));
+        const expenseCumulativeRaw: number[] = [];
+        expenseTotalsPerDate.reduce((acc, v, idx) => { const next = acc + v; expenseCumulativeRaw[idx] = next; return next; }, 0);
+        const expenseCumulative = expenseCumulativeRaw.map(v => -v); // negative cumulative
+
+        const expenseDatasets = expenseIds.map((expenseId, idx) => {
+            const series = dates.map(d => -(expenseMatrix[expenseId][d] || 0)); // negate to show as negative
+            const meta = expenses.find(e => e.id === expenseId);
+            const label = meta?.name || `Expense ${expenseId}`;
+            const color = getColor(idx);
+            return {
+                label,
+                data: series,
+                borderColor: color,
+                backgroundColor: color,
+                tension: 0.25,
+                pointRadius: 1.5,
+                group: 'expense'
+            } as any;
+        });
+
+        const operationalNet: number[] = incomeCumulative.map((v, i) => v + (expenseCumulative[i] || 0));
+
         return {
-            labels,
+            labels: dates,
             datasets: [
                 {
-                    label: 'Income',
-                    data: incomes,
-                    borderColor: '#34d399',
-                    backgroundColor: '#34d399',
-                    tension: 0.25,
-                    pointRadius: 3,
-                    fill: false,
-                    order: 2,
-                },
-                {
-                    label: 'Expense',
-                    data: expenses,
-                    borderColor: '#f87171',
-                    backgroundColor: '#f87171',
-                    tension: 0.25,
-                    pointRadius: 3,
-                    fill: false,
-                    order: 2,
-                },
-                {
-                    label: 'Cumulative Net',
-                    data: cumulative,
-                    borderColor: '#60a5fa',
-                    backgroundColor: '#60a5fa',
-                    tension: 0.25,
-                    pointRadius: 2,
-                    fill: false,
-                    borderWidth: 2,
-                    order: 1,
-                },
-                {
-                    label: 'Equity Balance',
-                    data: equityCumulative,
+                    label: 'Operational Cash',
+                    data: operationalNet,
                     borderColor: '#fbbf24',
                     backgroundColor: '#fbbf24',
                     tension: 0.25,
-                    pointRadius: 2,
-                    fill: false,
-                    borderDash: [6, 3],
-                    order: 1,
-                }
+                    pointRadius: 0,
+                    group: 'operational'
+                } as any,
+                {
+                    label: 'Income (Cumulative)',
+                    data: incomeCumulative,
+                    borderColor: '#34d399',
+                    backgroundColor: '#34d399',
+                    tension: 0.2,
+                    pointRadius: 0,
+                    group: 'income',
+                    cumulative: true
+                } as any,
+                ...incomeDatasets,
+                {
+                    label: 'Expenses (Cumulative)',
+                    data: expenseCumulative,
+                    borderColor: '#fb7185',
+                    backgroundColor: '#fb7185',
+                    tension: 0.2,
+                    pointRadius: 0,
+                    group: 'expense',
+                    cumulative: true
+                } as any,
+                ...expenseDatasets
             ]
-        }
-    }, [items, equityTxns])
+        };
+    }, [items, expenses, incomes]);
 
-    if (authLoading || orgLoading) return null
-    if (!user) return null
+    const submitEquityBuffer = useCallback(async () => {
+        if (!budgetId) return;
+        const min_val = Number(minInput);
+        const max_val = Number(maxInput);
+        if (Number.isNaN(min_val) || Number.isNaN(max_val)) { setEquityMsg('Invalid numbers'); return; }
+        if (min_val > max_val) { setEquityMsg('Min cannot exceed Max'); return; }
+        setEquityLoading(true); setEquityMsg(null);
+        const { error, data } = await supabase.rpc('ensure_budget_equity_buffer', { p_budget_id: budgetId, p_min_balance: min_val, p_max_balance: max_val });
+        if (error) setEquityMsg('Error: ' + error.message);
+        else {
+            setEquityMsg(`Equity buffer ensured (${Array.isArray(data) ? data.length : 0} actions)`);
+            setEquityFormOpen(false);
+        }
+        setEquityLoading(false);
+    }, [budgetId, minInput, maxInput]);
+
+    const handleEnsureEquityBuffer = useCallback(() => {
+        setMinInput('0');
+        setMaxInput('200');
+        setEquityFormOpen(true);
+        setEquityMsg(null);
+    }, []);
 
     return (
-        <div className="min-h-screen bg-gray-950 flex flex-col">
-            <nav className="bg-gray-900 shadow px-4 h-14 flex items-center gap-4 flex-shrink-0">
-                <button onClick={() => router.push(`/budget/${budgetId}`)} className="text-yellow-400 hover:text-yellow-300 text-sm">← Back</button>
-                <h2 className="text-yellow-400 font-semibold text-sm">Budget Performance</h2>
-            </nav>
-            <main className="flex-1 w-full p-0 flex flex-col overflow-hidden">
-                {/* Status / messages */}
-                {!combinedData && (
-                    <div className="p-4">
-                        {error && <div className="text-sm text-red-400 mb-2">{error}</div>}
-                        {loading && <div className="text-gray-300 text-sm mb-2">Loading…</div>}
-                        {!loading && !error && !items.length && <div className="text-gray-400 text-sm">No budget items yet. Generate them first.</div>}
-                    </div>
-                )}
-                {combinedData && (
-                    <div className="flex-1 w-full relative">
-                        <div className="absolute inset-0 p-4 flex flex-col">
-                            <div className="flex items-center justify-between mb-2">
-                                <h3 className="text-gray-100 font-semibold text-sm">Income, Expense & Cumulative Net</h3>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        onClick={() => {
-                                            const chart = chartRef.current
-                                            if (chart) {
-                                                chart.resetZoom()
-                                            }
-                                        }}
-                                        className="text-xs rounded bg-gray-800 hover:bg-gray-700 text-gray-200 px-2 py-1 border border-gray-700"
-                                    >Fit to View</button>
-                                    <button
-                                        onClick={() => setMode(m => m === 'pan' ? 'box-zoom' : 'pan')}
-                                        className={`text-xs rounded px-2 py-1 border transition-colors ${mode === 'pan' ? 'bg-blue-600/20 border-blue-500 text-blue-300 hover:bg-blue-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
-                                    >{mode === 'pan' ? 'Pan (active)' : 'Pan'}</button>
-                                    <button
-                                        onClick={() => setMode(m => m === 'box-zoom' ? 'pan' : 'box-zoom')}
-                                        className={`text-xs rounded px-2 py-1 border transition-colors ${mode === 'box-zoom' ? 'bg-purple-600/20 border-purple-500 text-purple-300 hover:bg-purple-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
-                                    >{mode === 'box-zoom' ? 'Box Zoom (active)' : 'Box Zoom'}</button>
-                                    <button
-                                        onClick={() => setGridOn(g => !g)}
-                                        className={`text-xs rounded px-2 py-1 border transition-colors ${gridOn ? 'bg-green-600/20 border-green-500 text-green-300 hover:bg-green-600/30' : 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700'}`}
-                                    >{gridOn ? 'Grid (on)' : 'Grid (off)'}</button>
-                                    <div className="relative">
+        <div className="h-screen flex bg-gray-950 text-gray-100">
+            {/* Sidebar Legend */}
+            <div className={"transition-all duration-300 border-r border-gray-800 bg-gray-900/60 backdrop-blur-sm flex flex-col " + (legendOpen ? 'w-56' : 'w-10')}>
+                <button
+                    onClick={() => setLegendOpen(o => !o)}
+                    className="h-10 w-full flex items-center justify-center text-xs font-medium uppercase tracking-wide bg-gray-900 hover:bg-gray-800 border-b border-gray-800"
+                >
+                    {legendOpen ? '◀' : '▶'}
+                </button>
+                {legendOpen && (
+                    <div className="flex-1 overflow-auto p-3 space-y-4">
+                        <div className="space-y-3">
+                            {/* Operational Cash parent */}
+                            <div>
+                                <div
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => setOperationalGroupOpen(o => !o)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOperationalGroupOpen(o => !o); } }}
+                                    className="w-full flex items-center justify-between text-[10px] font-bold uppercase tracking-wide text-gray-300 mb-2 hover:text-gray-100 cursor-pointer select-none"
+                                >
+                                    <span className="flex items-center gap-2">
+                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#fbbf24', opacity: hidden['Operational Cash'] ? 0.35 : 1 }} />
+                                        <span>Operational Cash</span>
+                                    </span>
+                                    <div className="flex items-center gap-1.5">
                                         <button
-                                            onClick={() => {
-                                                if (!showEquityConfig) { setTempMin(minEquity); setTempMax(maxEquity) }
-                                                setShowEquityConfig(v => !v)
-                                            }}
-                                            className={`text-xs rounded px-2 py-1 border transition-colors ${showEquityConfig ? 'bg-yellow-600/30 border-yellow-500 text-yellow-300' : 'bg-yellow-600/20 border-yellow-500 text-yellow-300 hover:bg-yellow-600/30'}`}
-                                        >{equityProcessing ? 'Calculating…' : 'Calc Equity Txns'}</button>
-                                        {showEquityConfig && (
-                                            <div className="absolute z-10 right-0 mt-2 w-56 bg-gray-900 border border-gray-700 rounded-md p-3 shadow-xl flex flex-col gap-2">
-                                                <div className="flex flex-col gap-1">
-                                                    <label className="text-[10px] uppercase tracking-wide text-gray-400">Min Balance</label>
-                                                    <input type="number" value={tempMin} onChange={e => setTempMin(Number(e.target.value))} className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-yellow-500 text-gray-100 placeholder-gray-500" />
-                                                </div>
-                                                <div className="flex flex-col gap-1">
-                                                    <label className="text-[10px] uppercase tracking-wide text-gray-400">Max Balance</label>
-                                                    <input type="number" value={tempMax} onChange={e => setTempMax(Number(e.target.value))} className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-yellow-500 text-gray-100 placeholder-gray-500" />
-                                                </div>
-                                                <div className="flex justify-end gap-2 pt-1">
-                                                    <button onClick={() => setShowEquityConfig(false)} className="text-[10px] px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300">Cancel</button>
-                                                    <button
-                                                        disabled={equityProcessing}
-                                                        onClick={async () => {
-                                                            setMinEquity(tempMin); setMaxEquity(tempMax); setShowEquityConfig(false); await runEnsureEquity();
-                                                        }}
-                                                        className={`text-[10px] px-2 py-1 rounded border ${equityProcessing ? 'opacity-60 cursor-not-allowed bg-yellow-700/30 border-yellow-600 text-yellow-300' : 'bg-yellow-600/20 border-yellow-500 text-yellow-300 hover:bg-yellow-600/30'}`}
-                                                    >Run</button>
-                                                </div>
-                                                <p className="text-[10px] text-gray-500 leading-snug">Creates contributions/drawings so balance stays within range.</p>
-                                            </div>
-                                        )}
+                                            type="button"
+                                            title="Toggle operational cash"
+                                            onClick={(e) => { e.stopPropagation(); toggleOperational(); }}
+                                            className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                        >Σ</button>
+                                        <span>{operationalGroupOpen ? '−' : '+'}</span>
                                     </div>
                                 </div>
-                                {(loading || error) && (
-                                    <div className="text-xs text-gray-400">{loading ? 'Refreshing…' : error}</div>
+                                {operationalGroupOpen && (
+                                    <div className="pl-3 border-l border-gray-800 space-y-4">
+                                        {/* Income section (nested) */}
+                                        <div>
+                                            <div
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => setIncomesGroupOpen(o => !o)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIncomesGroupOpen(o => !o); } }}
+                                                className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
+                                            >
+                                                <span className="flex items-center gap-2">
+                                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#34d399', opacity: hidden['Income (Cumulative)'] ? 0.35 : 1 }} />
+                                                    <span>Income</span>
+                                                </span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <button
+                                                        type="button"
+                                                        title="Toggle cumulative"
+                                                        onClick={(e) => { e.stopPropagation(); toggleCumulative('income'); }}
+                                                        className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                    >Σ</button>
+                                                    <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('income'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
+                                                    <span>{incomesGroupOpen ? '−' : '+'}</span>
+                                                </div>
+                                            </div>
+                                            {incomesGroupOpen && (
+                                                <ul className="space-y-1 text-sm max-h-64 overflow-auto pr-1">
+                                                    {(chartData?.datasets || [])
+                                                        .filter(d => (d as any).group === 'income' && !(d as any).cumulative)
+                                                        .map(ds => {
+                                                            const color = ds.borderColor as string;
+                                                            const isHidden = hidden[ds.label];
+                                                            return (
+                                                                <li key={ds.label}>
+                                                                    <button
+                                                                        onClick={() => toggleDataset(ds.label)}
+                                                                        className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
+                                                                    >
+                                                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
+                                                                        <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
+                                                                    </button>
+                                                                </li>
+                                                            );
+                                                        })}
+                                                </ul>
+                                            )}
+                                        </div>
+                                        {/* Expenses section (nested) */}
+                                        <div>
+                                            <div
+                                                role="button"
+                                                tabIndex={0}
+                                                onClick={() => setExpensesGroupOpen(o => !o)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpensesGroupOpen(o => !o); } }}
+                                                className="w-full flex items-center justify-between text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-1 hover:text-gray-300 cursor-pointer select-none"
+                                            >
+                                                <span className="flex items-center gap-2">
+                                                    <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: '#fb7185', opacity: hidden['Expenses (Cumulative)'] ? 0.35 : 1 }} />
+                                                    <span>Expenses</span>
+                                                </span>
+                                                <div className="flex items-center gap-1.5">
+                                                    <button
+                                                        type="button"
+                                                        title="Toggle cumulative"
+                                                        onClick={(e) => { e.stopPropagation(); toggleCumulative('expense'); }}
+                                                        className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700"
+                                                    >Σ</button>
+                                                    <button type="button" onClick={(e) => { e.stopPropagation(); toggleGroup('expense'); }} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 hover:bg-gray-700 border border-gray-700">Toggle</button>
+                                                    <span>{expensesGroupOpen ? '−' : '+'}</span>
+                                                </div>
+                                            </div>
+                                            {expensesGroupOpen && (
+                                                <ul className="space-y-1 text-sm max-h-64 overflow-auto pr-1">
+                                                    {(chartData?.datasets || [])
+                                                        .filter(d => (d as any).group === 'expense' && !(d as any).cumulative)
+                                                        .map(ds => {
+                                                            const color = ds.borderColor as string;
+                                                            const isHidden = hidden[ds.label];
+                                                            return (
+                                                                <li key={ds.label}>
+                                                                    <button
+                                                                        onClick={() => toggleDataset(ds.label)}
+                                                                        className="w-full flex items-center gap-2 rounded px-2 py-1 hover:bg-gray-800/70 text-left"
+                                                                    >
+                                                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: color, opacity: isHidden ? 0.3 : 1 }} />
+                                                                        <span className={isHidden ? 'line-through opacity-60' : ''}>{ds.label}</span>
+                                                                    </button>
+                                                                </li>
+                                                            );
+                                                        })}
+                                                </ul>
+                                            )}
+                                        </div>
+                                    </div>
                                 )}
                             </div>
-                            <div className="w-full flex-1">
-                                <Line
-                                    ref={chartRef}
-                                    data={combinedData as any}
-                                    options={{
-                                        responsive: true,
-                                        maintainAspectRatio: false,
-                                        plugins: {
-                                            legend: { labels: { color: '#e5e7eb', usePointStyle: true } },
-                                            tooltip: {
-                                                mode: 'index',
-                                                intersect: false,
-                                                callbacks: {
-                                                    title: (items) => {
-                                                        if (!items.length) return ''
-                                                        const raw = items[0].label as string
-                                                        const d = new Date(raw)
-                                                        if (isNaN(d.getTime())) return raw
-                                                        return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
-                                                    }
-                                                }
-                                            },
-                                            ...(zoomReady ? {
-                                                zoom: {
-                                                    limits: {
-                                                        x: { minRange: 1 },
-                                                        y: { minRange: 1 }
-                                                    },
-                                                    pan: { enabled: mode === 'pan', mode: 'xy' },
-                                                    zoom: {
-                                                        wheel: { enabled: true },
-                                                        pinch: { enabled: true },
-                                                        drag: { enabled: mode === 'box-zoom' },
-                                                        mode: mode === 'box-zoom' ? 'xy' : 'xy'
-                                                    }
-                                                }
-                                            } : {})
-                                        },
-                                        interaction: { mode: 'nearest', intersect: false },
-                                        scales: {
-                                            x: {
-                                                ticks: {
-                                                    color: '#9ca3af',
-                                                    callback: (v, idx, ticks) => {
-                                                        const value = (typeof v === 'string') ? v : (combinedData?.labels?.[Number(v)] as string)
-                                                        const d = new Date(value)
-                                                        if (isNaN(d.getTime())) return value
-                                                        return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' })
-                                                    }
-                                                },
-                                                grid: { color: '#1f2937', display: gridOn }
-                                            },
-                                            y: {
-                                                ticks: { color: '#9ca3af' },
-                                                beginAtZero: true,
-                                                grid: {
-                                                    color: '#1f2937',
-                                                    display: gridOn,
-                                                    lineWidth: (ctx: any) => (ctx.tick && ctx.tick.value === 0 ? 2 : 1),
-                                                }
-                                            }
-                                        }
-                                    }}
-                                />
+                            {/* Equity buffer action below group */}
+                            <div className="pt-1 space-y-2">
+                                <button
+                                    type="button"
+                                    disabled={equityLoading}
+                                    onClick={handleEnsureEquityBuffer}
+                                    className="w-full text-[10px] font-semibold uppercase tracking-wide rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed px-2 py-1"
+                                >Ensure Equity Buffer</button>
+                                {equityFormOpen && (
+                                    <div className="space-y-2 rounded border border-amber-700 bg-gray-800/70 p-2">
+                                        <div className="flex gap-2">
+                                            <div className="flex-1">
+                                                <label className="block text-[9px] uppercase tracking-wide text-gray-400 mb-0.5">Min</label>
+                                                <input
+                                                    value={minInput}
+                                                    onChange={e => setMinInput(e.target.value)}
+                                                    type="number"
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                    placeholder="e.g. 100"
+                                                />
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="block text-[9px] uppercase tracking-wide text-gray-400 mb-0.5">Max</label>
+                                                <input
+                                                    value={maxInput}
+                                                    onChange={e => setMaxInput(e.target.value)}
+                                                    type="number"
+                                                    className="w-full bg-gray-900 border border-gray-700 rounded px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                                    placeholder="e.g. 250"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center justify-end gap-2 pt-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => { setEquityFormOpen(false); }}
+                                                className="text-[10px] px-2 py-1 rounded border border-gray-600 hover:bg-gray-700"
+                                            >Cancel</button>
+                                            <button
+                                                type="button"
+                                                disabled={equityLoading}
+                                                onClick={submitEquityBuffer}
+                                                className="text-[10px] px-2 py-1 rounded bg-amber-600 hover:bg-amber-500 disabled:opacity-50"
+                                            >{equityLoading ? 'Running...' : 'Run'}</button>
+                                        </div>
+                                    </div>
+                                )}
+                                {equityMsg && <p className="text-[10px] text-gray-400 leading-snug">{equityMsg}</p>}
                             </div>
                         </div>
                     </div>
                 )}
-            </main>
+            </div>
+            {/* Main content */}
+            <div className="flex-1 flex flex-col p-6">
+                <div className="mb-4 shrink-0">
+                    <h1 className="text-lg font-semibold">Budget Items (Income vs Expense)</h1>
+                    {loading && <p className="text-sm text-gray-400">Loading…</p>}
+                    {error && <p className="text-sm text-red-400">{error}</p>}
+                    {!loading && !error && !items.length && <p className="text-sm text-gray-400">No items.</p>}
+                </div>
+                {chartData && (
+                    <div className="flex-1 min-h-0 bg-gray-900 border border-gray-800 rounded p-4">
+                        <div className="w-full h-full">
+                            <Line
+                                ref={chartRef}
+                                data={chartData}
+                                options={{
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    interaction: { mode: 'index', intersect: false },
+                                    plugins: {
+                                        legend: { display: false },
+                                        tooltip: { mode: 'index', intersect: false }
+                                    },
+                                    scales: {
+                                        x: {
+                                            ticks: { color: '#9ca3af' },
+                                            grid: { color: '#1f2937' }
+                                        },
+                                        y: {
+                                            ticks: { color: '#9ca3af' },
+                                            grid: { color: '#1f2937' }
+                                        }
+                                    }
+                                }}
+                            />
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
-    )
+    );
 }
