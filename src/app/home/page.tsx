@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/contexts/AuthContext'
 import { useOrg } from '@/contexts/OrgContext'
@@ -9,6 +9,10 @@ export default function HomePage() {
   const { user, loading, signOut } = useAuth()
   const router = useRouter()
 
+  // Ensure SSR and first client paint match to avoid hydration mismatches
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+
   const cards = [
     { title: 'Structure Graph', desc: 'Visualize organizational structure and relationships.', path: '/structure-graph' },
     { title: 'Business Plan', desc: 'Strategic goals and initiatives.', path: '/business-plan' },
@@ -16,17 +20,18 @@ export default function HomePage() {
   ]
 
   useEffect(() => {
-    if (!loading && !user) {
+    if (mounted && !loading && !user) {
       router.push('/login')
     }
-  }, [user, loading, router])
+  }, [user, loading, router, mounted])
 
   const handleSignOut = async () => {
     await signOut()
     router.push('/login')
   }
 
-  if (loading) {
+  // Render a consistent fallback until mounted to keep server and client HTML in sync
+  if (!mounted || loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-950">
         <div className="text-lg text-gray-100">Loading...</div>
@@ -35,7 +40,7 @@ export default function HomePage() {
   }
 
   if (!user) {
-    return null // Will redirect to login
+    return null // Will redirect to login after mount
   }
 
   return (
